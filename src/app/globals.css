@@ -1,0 +1,302 @@
+@import "tailwindcss";
+ 
+/* ============================================================
+   Pickframe — Design System
+   Tokens kept tiny and named by *role*, not value.
+   One radius scale. One border. Shadows reserved for elevated layers.
+   ============================================================ */
+ 
+@theme inline {
+  --font-sans: var(--font-sans-stack);
+  --font-mono: var(--font-mono-stack);
+  --font-serif: var(--font-serif-stack);
+ 
+  --color-bg: var(--bg);
+  --color-bg-soft: var(--bg-soft);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-border: var(--border);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-fg: var(--brand-fg);
+  --color-winner: var(--winner);
+  --color-picked: var(--picked);
+  --color-partial: var(--partial);
+  --color-rejected: var(--rejected);
+  --color-danger: var(--danger);
+ 
+ /* One canonical radius scale. Use --r-pill only for pills. */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+}
+ 
+:root {
+ --font-sans-stack: var(--font-inter), -apple-system, BlinkMacSystemFont,
+ "PingFang SC", "HarmonyOS Sans SC", "Microsoft Yahei", system-ui, sans-serif;
+ --font-mono-stack: var(--font-jetbrains-mono), ui-monospace, "JetBrains Mono",
+ "SF Mono", Menlo, monospace;
+ --font-serif-stack: ui-serif, "Iowan Old Style", "Source Serif Pro", Georgia,
+ serif;
+ 
+ /* Light — paper */
+ --bg: #fafaf7;
+ --bg-soft: #f2f0ea;
+ --surface: #ffffff;
+ --surface-elevated: #ffffff;
+ --border: #e8e4d9;
+ --fg: #131210;
+ --fg-muted: #6b6557;
+ --fg-subtle: #a39d8c;
+ --brand: #5b5bd6;
+ --brand-soft: #ecebff;
+ --brand-fg: #ffffff;
+ --winner: #c69412;
+ --picked: #5b5bd6;
+ --partial: #b56808;
+ --rejected: #9b9684;
+ --danger: #c8341d;
+ 
+ /* Reserved exclusively for floating dialogs / dropdowns. */
+ --shadow-pop: 0 1px 0 rgb(0 0 0 / 0.02), 0 8px 28px -12px rgb(0 0 0 / 0.18);
+ --shadow-modal: 0 24px 56px -16px rgb(0 0 0 / 0.22);
+ 
+ /* Modal/dialog scrim — paper-tone in light, ink in dark.
+     Tiers: -light (~drawer), default (~dialog), -strong (~quicklook). */
+ --scrim-light: rgb(250 250 247 / 0.55);
+ --scrim: rgb(250 250 247 / 0.72);
+ --scrim-strong: rgb(250 250 247 / 0.86);
+}
+ 
+.dark {
+ /* Dark — warm neutral, no blue cast, tight surface/bg deltas. */
+ --bg: #0e0e0e;
+ --bg-soft: #131313;
+ --surface: #161616;
+ --surface-elevated: #1a1a1a;
+ --border: #262626;
+ --fg: #f4f3f1;
+ --fg-muted: #9b9893;
+ --fg-subtle: #66635e;
+ --brand: #c89c5b;
+ --brand-soft: #1f1a13;
+ --brand-fg: #0e0e0e;
+ --winner: #d9a93a;
+ --picked: #c89c5b;
+ --partial: #c98448;
+ --rejected: #5a5854;
+ --danger: #d76b54;
+ 
+ --shadow-pop: 0 8px 28px -10px rgb(0 0 0 / 0.6);
+ --shadow-modal: 0 30px 60px -15px rgb(0 0 0 / 0.7);
+ 
+ --scrim-light: rgb(0 0 0 / 0.45);
+ --scrim: rgb(0 0 0 / 0.6);
+ --scrim-strong: rgb(0 0 0 / 0.78);
+}
+ 
+* {
+ box-sizing: border-box;
+}
+ 
+html,
+body {
+ height: 100%;
+ background: var(--bg);
+ color: var(--fg);
+ font-family: var(--font-sans-stack);
+ font-feature-settings: "ss01", "cv11";
+ -webkit-font-smoothing: antialiased;
+ text-rendering: optimizeLegibility;
+ /* Reserve gutter so a vertical scrollbar appearing/disappearing can't
+    shift the layout horizontally — root cause of the "jump" the user sees. */
+ scrollbar-gutter: stable;
+ /* Never show the page-level horizontal scrollbar; inner views own their
+    own horizontal scrolling where intentional (Compare, Flow). */
+ overflow-x: hidden;
+}
+ 
+body {
+ overscroll-behavior: none;
+}
+ 
+::selection {
+ background: var(--brand-soft);
+ color: var(--fg);
+}
+ 
+/* Scrollbars — minimal */
+* {
+ scrollbar-width: thin;
+ scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar {
+ width: 10px;
+ height: 10px;
+}
+*::-webkit-scrollbar-track {
+ background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+ background: var(--border);
+ border-radius: 999px;
+ border: 2px solid transparent;
+ background-clip: padding-box;
+}
+ 
+/* Focus rings */
+:focus-visible {
+ outline: none;
+}
+.focus-ring {
+ outline: 2px solid transparent;
+ outline-offset: 1px;
+}
+.focus-ring:focus-visible {
+ outline-color: var(--brand);
+}
+ 
+/* Pop animation reserved for floating overlays — short, subtle. */
+@keyframes pop-in {
+ from {
+ opacity: 0;
+ transform: translateY(2px) scale(0.99);
+  }
+ to {
+ opacity: 1;
+ transform: translateY(0) scale(1);
+  }
+}
+.pop-in {
+ animation: pop-in 140ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* Splash logo — gentle breathing animation rendered in CSS so the
+   SplashLogo component doesn't have to pull in framer-motion just for
+   a 56-px loading mark. Kept identical in feel to the old motion
+   variant: the lockup scales 1 → 1.04 → 1 once every 1.6 s while the
+   two rectangles fade between offset opacity stops. Respects the
+   user's reduced-motion preference. */
+@keyframes pf-splash-breathe {
+ 0% { transform: scale(1); }
+ 50% { transform: scale(1.04); }
+ 100% { transform: scale(1); }
+}
+@keyframes pf-splash-back-fade {
+ 0% { opacity: 0.18; }
+ 50% { opacity: 0.32; }
+ 100% { opacity: 0.18; }
+}
+@keyframes pf-splash-front-fade {
+ 0% { opacity: 0.78; }
+ 50% { opacity: 1; }
+ 100% { opacity: 0.78; }
+}
+.pf-splash {
+ transform-origin: 16px 16px;
+ animation: pf-splash-breathe 1.6s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+}
+.pf-splash-back {
+ animation: pf-splash-back-fade 1.6s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+}
+.pf-splash-front {
+ animation: pf-splash-front-fade 1.6s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+ animation-delay: 0.18s;
+}
+@media (prefers-reduced-motion: reduce) {
+ .pf-splash,
+ .pf-splash-back,
+ .pf-splash-front {
+ animation: none;
+  }
+ .pf-splash-back {
+ opacity: 0.22;
+  }
+}
+
+/* Skeleton shimmer — used in the Sidebar while data loads. Single bar
+   slides slowly across a muted track so the rail doesn't sit dead. */
+@keyframes pf-shimmer {
+ 0% {
+ background-position: 200% 0;
+  }
+ 100% {
+ background-position: -200% 0;
+  }
+}
+.pf-skel {
+ background: linear-gradient(
+ 90deg,
+ var(--bg-soft) 0%,
+ var(--surface) 35%,
+ var(--bg-soft) 70%
+  );
+ background-size: 200% 100%;
+ animation: pf-shimmer 1.4s linear infinite;
+ border-radius: var(--radius-sm);
+}
+ 
+/* Radix data-state driven enter/exit for context menus and other popovers. */
+@keyframes cm-in {
+ from {
+ opacity: 0;
+ transform: scale(0.97) translateY(2px);
+  }
+ to {
+ opacity: 1;
+ transform: scale(1) translateY(0);
+  }
+}
+@keyframes cm-out {
+ from {
+ opacity: 1;
+ transform: scale(1) translateY(0);
+  }
+ to {
+ opacity: 0;
+ transform: scale(0.985) translateY(1px);
+  }
+}
+.animate-cm-in {
+ animation: cm-in 130ms cubic-bezier(0.2, 0.7, 0.2, 1);
+ transform-origin: var(--radix-context-menu-content-transform-origin, top);
+}
+.animate-cm-out {
+ animation: cm-out 100ms cubic-bezier(0.4, 0, 1, 1);
+ transform-origin: var(--radix-context-menu-content-transform-origin, top);
+}
+ 
+/* Dot for verdict chips */
+.dot {
+ width: 7px;
+ height: 7px;
+ border-radius: 999px;
+ display: inline-block;
+}
+ 
+.checkered {
+ background-image:
+ linear-gradient(45deg, var(--bg-soft) 25%, transparent 25%),
+ linear-gradient(-45deg, var(--bg-soft) 25%, transparent 25%),
+ linear-gradient(45deg, transparent 75%, var(--bg-soft) 75%),
+ linear-gradient(-45deg, transparent 75%, var(--bg-soft) 75%);
+ background-size: 16px 16px;
+ background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+ 
+.visually-hidden {
+ position: absolute;
+ width: 1px;
+ height: 1px;
+ padding: 0;
+ margin: -1px;
+ overflow: hidden;
+ clip: rect(0, 0, 0, 0);
+ white-space: nowrap;
+ border: 0;
+}
