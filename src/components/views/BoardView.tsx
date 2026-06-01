@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useStore } from "@/lib/store";
 import { VersionCard, VERSION_DRAG_MIME } from "./VersionCard";
 import { filterVersions } from "@/lib/filters";
-import { Plus, Upload, X, ImageDown, Crown, Trash2 } from "lucide-react";
+import { Plus, Upload, X, ImageDown, Crown, Trash2, Columns2 } from "lucide-react";
 import { cn, useIsMobile } from "@/lib/utils";
 import type { Verdict } from "@/lib/types";
 import { VERDICT_COLOR, VERDICT_LABEL } from "@/lib/types";
@@ -519,6 +519,8 @@ function PageSection({
  setHotPage: (hot: boolean) => void;
 }) {
  const [hot, setHot] = React.useState<null | "files" | "versions">(null);
+ const setCompare = useStore((s) => s.setCompare);
+ const setViewMode = useStore((s) => s.setViewMode);
  
  const onDragEnter = (e: React.DragEvent) => {
  const types = e.dataTransfer.types;
@@ -596,13 +598,27 @@ function PageSection({
           </span>
  
         </div>
-        <button
+        <div className="flex items-center gap-1 shrink-0">
+          {list.length >= 2 && (
+            <button
+ onClick={() => {
+                setCompare(list.map((v) => v.id));
+                setViewMode("compare");
+              }}
+ className="inline-flex items-center gap-1.5 h-7 px-2 rounded-[var(--radius-sm)] text-[11.5px] text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--bg-soft)]"
+            >
+              <Columns2 size={11} />
+              Compare all
+            </button>
+          )}
+          <button
  onClick={onUploadClick}
  className="inline-flex items-center gap-1.5 h-7 px-2 rounded-[var(--radius-sm)] text-[11.5px] text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--bg-soft)]"
-        >
-          <Upload size={11} />
-          Upload
-        </button>
+          >
+            <Upload size={11} />
+            Upload
+          </button>
+        </div>
       </div>
  
       <div className="flex flex-wrap gap-3 items-stretch min-h-[64px]">
@@ -634,6 +650,7 @@ function FloatingSelectionBar() {
   const clearSelected = useStore((s) => s.clearSelected);
   const setExportOpen = useStore((s) => s.setExportOpen);
   const setViewMode = useStore((s) => s.setViewMode);
+  const setCompare = useStore((s) => s.setCompare);
   const setVerdict = useStore((s) => s.setVerdict);
   const deleteVersion = useStore((s) => s.deleteVersion);
   const isMobile = useIsMobile();
@@ -739,6 +756,18 @@ function FloatingSelectionBar() {
                 {verdictDot("rejected")}
               </div>
               <span className="w-px h-5 bg-[var(--border)] shrink-0" />
+              {ids.length >= 2 && (
+                <button
+                  onClick={() => {
+                    setCompare(ids);
+                    setViewMode("compare");
+                  }}
+                  className="grid place-items-center h-9 w-9 shrink-0 rounded-full text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--bg-soft)]"
+                  aria-label="Compare selected"
+                >
+                  <Columns2 size={15} />
+                </button>
+              )}
               <button
                 onClick={() => setExportOpen(true)}
                 className="grid place-items-center h-9 w-9 shrink-0 rounded-full text-[var(--brand)] hover:bg-[var(--bg-soft)]"
@@ -782,10 +811,10 @@ function FloatingSelectionBar() {
               {verdictBtn("partial")}
               {verdictBtn("rejected")}
               <span className="w-px h-4 bg-[var(--border)] mx-1" />
-              {ids.length >= 2 && ids.length <= 4 && (
+              {ids.length >= 2 && (
                 <button
                   onClick={() => {
-                    useStore.setState({ compareIds: ids.slice(0, 4) });
+                    setCompare(ids);
                     setViewMode("compare");
                   }}
                   className="inline-flex items-center h-8 px-3 rounded-[var(--radius-pill)] text-[12px] text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--bg-soft)]"
