@@ -1,30 +1,65 @@
 "use client";
- 
+
 import * as React from "react";
 import { useStore } from "@/lib/store";
 import { Thumb } from "../primitives/Thumb";
 import { Button } from "../primitives/Button";
-import { ChevronDown, X, Crown } from "lucide-react";
+import {
+  ChevronDown,
+  X,
+  Crown,
+  Plus,
+  Minus,
+  Minimize2,
+  Maximize2,
+  ArrowLeft,
+  ArrowUpRight,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { VERDICT_COLOR, VERDICT_LABEL } from "@/lib/types";
- 
+
+/**
+ * Compare — a pannable, zoomable canvas (same camera as Flow) that lays out
+ * every pinned version side by side at its true aspect ratio. Unlike the old
+ * fixed grid it has no version cap and no wheel-trapped horizontal scrollbar:
+ * drag to pan, scroll to zoom, exactly like Flow.
+ *
+ * Interactions:
+ *  - Drag empty canvas to pan; scroll to zoom around cursor; shift+scroll or
+ *    trackpad two-finger to pan; pinch to zoom on touch.
+ *  - Hover a frame for its actions (Pick this / Open / Remove).
+ *  - Double-click a frame to open it in Single view.
+ */
+
+const FRAME_HEIGHT = 560; // px at zoom = 1
+const GUTTER = 56; // gap between frames
+const VPAD = 72; // top/bottom padding inside the world
+const HPAD = 64; // left/right padding inside the world
+
 export function CompareView() {
- const compareIds = useStore((s) => s.compareIds);
- const versions = useStore((s) => s.versions);
- const activeProjectId = useStore((s) => s.activeProjectId);
- const setVerdict = useStore((s) => s.setVerdict);
- const toggleCompare = useStore((s) => s.toggleCompare);
- const setFocused = useStore((s) => s.setFocused);
- const setViewMode = useStore((s) => s.setViewMode);
- 
- const [pickerOpen, setPickerOpen] = React.useState(false);
- 
- const compareVersions = React.useMemo(
-    () => compareIds.map((id) => versions.find((v) => v.id === id)).filter(Boolean) as typeof versions,
+  const compareIds = useStore((s) => s.compareIds);
+  const versions = useStore((s) => s.versions);
+  const activeProjectId = useStore((s) => s.activeProjectId);
+  const setVerdict = useStore((s) => s.setVerdict);
+  const toggleCompare = useStore((s) => s.toggleCompare);
+  const setFocused = useStore((s) => s.setFocused);
+  const setViewMode = useStore((s) => s.setViewMode);
+
+  const [pickerOpen, setPickerOpen] = React.useState(false);
+  // Which frame is hovered/focused — drives its action chips. Done in state
+  // rather than `group-hover:` because Tailwind v4 gates hover variants behind
+  // `@media (hover: hover)`, so they never show on touch / pen.
+  const [activeFrameId, setActiveFrameId] = React.useState<string | null>(null);
+
+  const compareVersions = React.useMemo(
+    () =>
+      compareIds
+        .map((id) => versions.find((v) => v.id === id))
+        .filter(Boolean) as typeof versions,
     [compareIds, versions],
   );
- 
- const candidates = React.useMemo(
+
+  const candidates = React.useMemo(
     () =>
       versions
         .filter((v) => v.projectId === activeProjectId)
@@ -32,9 +67,210 @@ export function CompareView() {
         .sort((a, b) => a.label.localeCompare(b.label)),
     [versions, activeProjectId, compareIds],
   );
- 
- if (compareVersions.length === 0) {
- return (
+
+  // Frame layout: left-to-right, each frame keeps the image's aspect ratio.
+  const frames = React.useMemo(() => {
+    return compareVersions.reduce<
+      {
+        v: (typeof compareVersions)[number];
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+      }[]
+    >((acc, v) => {
+      const aspect =
+        v.width > 0 && v.height > 0 ? v.width / v.height : 9 / 19.5;
+      const h = FRAME_HEIGHT;
+      const w = Math.max(180, Math.round(h * aspect));
+      const prev = acc[acc.length - 1];
+      const x = prev ? prev.x + prev.w + GUTTER : HPAD;
+      acc.push({ v, x, y: VPAD, w, h });
+      return acc;
+    }, []);
+  }, [compareVersions]);
+
+  const totalW =
+    frames.length > 0
+      ? frames[frames.length - 1].x + frames[frames.length - 1].w + HPAD
+      : HPAD * 2;
+  const totalH = FRAME_HEIGHT + VPAD * 2;
+
+  // Camera (pan in viewport px, zoom is a multiplier).
+  const [zoom, setZoom] = React.useState(1);
+  const [pan, setPan] = React.useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = React.useState(false);
+  const wrapRef = React.useRef<HTMLDivElement>(null);
+  const draggingRef = React.useRef<{
+    baseX: number;
+    baseY: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+
+  const fitCamera = React.useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return;
+    const margin = 64;
+    const s = Math.min(
+      1,
+      Math.min((r.width - margin) / totalW, (r.height - margin) / totalH),
+    );
+    setZoom(s);
+    setPan({ x: (r.width - totalW * s) / 2, y: (r.height - totalH * s) / 2 });
+  }, [totalW, totalH]);
+
+  const actualSize = React.useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setZoom(1);
+    setPan({ x: (r.width - totalW) / 2, y: 40 });
+  }, [totalW]);
+
+  // Re-fit when the scene changes (project / number of frames / total size).
+  const fitKey = `${activeProjectId ?? "_"}:${frames.length}:${totalW}`;
+  const lastFitKeyRef = React.useRef<string | null>(null);
+  React.useLayoutEffect(() => {
+    if (lastFitKeyRef.current === fitKey) return;
+    lastFitKeyRef.current = fitKey;
+    fitCamera();
+  }, [fitKey, fitCamera]);
+
+  // Wheel: plain scroll zooms around the cursor; shift / trackpad pans.
+  const onWheel = (e: React.WheelEvent) => {
+    const isPinch = e.ctrlKey || e.metaKey;
+    const isTrackpadPan = !isPinch && Math.abs(e.deltaX) > 0;
+    if (e.shiftKey && !isPinch) {
+      setPan((p) => ({ x: p.x - e.deltaY, y: p.y }));
+      return;
+    }
+    if (isTrackpadPan) {
+      setPan((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
+      return;
+    }
+    const r = wrapRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const mx = e.clientX - r.left;
+    const my = e.clientY - r.top;
+    const wx = (mx - pan.x) / zoom;
+    const wy = (my - pan.y) / zoom;
+    const next = Math.max(0.1, Math.min(3, zoom * (1 - e.deltaY * 0.0018)));
+    setZoom(next);
+    setPan({ x: mx - wx * next, y: my - wy * next });
+  };
+
+  const zoomAroundCenter = (next: number) => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const cx = r.width / 2;
+    const cy = r.height / 2;
+    const wx = (cx - pan.x) / zoom;
+    const wy = (cy - pan.y) / zoom;
+    const clamped = Math.max(0.1, Math.min(3, next));
+    setZoom(clamped);
+    setPan({ x: cx - wx * clamped, y: cy - wy * clamped });
+  };
+
+  // Pointer-based pan (1 pointer) + pinch zoom (2 pointers).
+  const pointersRef = React.useRef<Map<number, { x: number; y: number }>>(
+    new Map(),
+  );
+  const pinchRef = React.useRef<{
+    startDist: number;
+    startZoom: number;
+    worldX: number;
+    worldY: number;
+  } | null>(null);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.pointerType === "mouse" && e.button !== 0 && e.button !== 2) return;
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    if (pointersRef.current.size === 1) {
+      draggingRef.current = {
+        baseX: pan.x,
+        baseY: pan.y,
+        startX: e.clientX,
+        startY: e.clientY,
+      };
+      setIsDragging(true);
+    } else if (pointersRef.current.size === 2) {
+      draggingRef.current = null;
+      const pts = Array.from(pointersRef.current.values());
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+      const mx = (pts[0].x + pts[1].x) / 2;
+      const my = (pts[0].y + pts[1].y) / 2;
+      const r = wrapRef.current?.getBoundingClientRect();
+      const lx = r ? mx - r.left : mx;
+      const ly = r ? my - r.top : my;
+      pinchRef.current = {
+        startDist: dist,
+        startZoom: zoom,
+        worldX: (lx - pan.x) / zoom,
+        worldY: (ly - pan.y) / zoom,
+      };
+    }
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!pointersRef.current.has(e.pointerId)) return;
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pointersRef.current.size === 2 && pinchRef.current) {
+      const pts = Array.from(pointersRef.current.values());
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+      const next = Math.max(
+        0.1,
+        Math.min(3, pinchRef.current.startZoom * (dist / pinchRef.current.startDist)),
+      );
+      const mx = (pts[0].x + pts[1].x) / 2;
+      const my = (pts[0].y + pts[1].y) / 2;
+      const r = wrapRef.current?.getBoundingClientRect();
+      const lx = r ? mx - r.left : mx;
+      const ly = r ? my - r.top : my;
+      setZoom(next);
+      setPan({
+        x: lx - pinchRef.current.worldX * next,
+        y: ly - pinchRef.current.worldY * next,
+      });
+      return;
+    }
+    const d = draggingRef.current;
+    if (!d) return;
+    setPan({
+      x: d.baseX + (e.clientX - d.startX),
+      y: d.baseY + (e.clientY - d.startY),
+    });
+  };
+
+  const onPointerUp = (e: React.PointerEvent) => {
+    pointersRef.current.delete(e.pointerId);
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    if (pointersRef.current.size < 2) pinchRef.current = null;
+    if (pointersRef.current.size === 0) {
+      draggingRef.current = null;
+      setIsDragging(false);
+    } else if (pointersRef.current.size === 1) {
+      const remaining = Array.from(pointersRef.current.values())[0];
+      draggingRef.current = {
+        baseX: pan.x,
+        baseY: pan.y,
+        startX: remaining.x,
+        startY: remaining.y,
+      };
+    }
+  };
+
+  if (compareVersions.length === 0) {
+    return (
       <div className="absolute inset-0 grid place-items-center px-6 text-center">
         <div className="max-w-[400px]">
           <h2 className="text-[18px] font-semibold tracking-tight">
@@ -45,139 +281,277 @@ export function CompareView() {
             <b>Compare</b> — or use <b>Compare all</b> on a page header to
             line up every version. Add more from the menu below.
           </p>
-          <div className="mt-4 flex justify-center">
+          <div className="mt-4 flex items-center justify-center gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setViewMode("board")}>
+              <ArrowLeft size={12} />
+              Back
+            </Button>
             <PickerButton
- candidates={candidates.map((v) => ({
+              candidates={candidates.map((v) => ({
                 id: v.id,
                 label: v.label,
                 blobId: v.thumbBlobId ?? v.blobId,
               }))}
- onPick={(id) => toggleCompare(id)}
- onOpenChange={setPickerOpen}
- open={pickerOpen}
+              onPick={(id) => toggleCompare(id)}
+              onOpenChange={setPickerOpen}
+              open={pickerOpen}
+              align="left"
             />
           </div>
         </div>
       </div>
     );
   }
- 
- return (
-    <div className="absolute inset-0 flex flex-col bg-[var(--bg-soft)]">
-      <div className="h-10 shrink-0 flex items-center gap-2 px-3 border-b border-[var(--border)] bg-[var(--bg)]">
-        <Button
- size="sm"
- variant="ghost"
- onClick={() => setViewMode("board")}
-        >
-          Back
-        </Button>
-        <span className="text-[12.5px] text-[var(--fg-muted)]">
-          Compare · {compareVersions.length}
-        </span>
-        <span className="ml-auto" />
-        <PickerButton
- candidates={candidates.map((v) => ({
-            id: v.id,
-            label: v.label,
-            blobId: v.thumbBlobId ?? v.blobId,
-          }))}
- onPick={(id) => toggleCompare(id)}
- onOpenChange={setPickerOpen}
- open={pickerOpen}
-        />
-      </div>
-      {/* One scrollable row of panels so any number of versions lay out side
-          by side — 2 fill the width, many overflow into a horizontal scroll
-          (each panel keeps a comfortable min width). */}
-      <div className="flex-1 min-h-0 flex gap-3 p-3 sm:p-4 overflow-x-auto overflow-y-hidden">
-        {compareVersions.map((v) => (
+
+  return (
+    <div
+      ref={wrapRef}
+      onWheel={onWheel}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      className="absolute inset-2 overflow-hidden bg-[var(--bg-soft)] select-none rounded-[var(--radius-lg)] border border-[var(--border)]"
+      style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
+    >
+      {/* Dotted background grid for canvas feel */}
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          backgroundImage:
+            "radial-gradient(circle, var(--border) 1px, transparent 1px)",
+          backgroundSize: "24px 24px",
+          opacity: 0.55,
+        }}
+      />
+
+      {/* World */}
+      <div
+        className="absolute top-0 left-0 origin-top-left"
+        style={{
+          width: totalW,
+          height: totalH,
+          transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
+          willChange: "transform",
+        }}
+      >
+        {frames.map(({ v, x, y, w, h }, i) => (
           <div
- key={v.id}
- className="relative flex flex-col h-full bg-[var(--surface)] border border-[var(--border)] rounded-[var(--radius-lg)] overflow-hidden"
- style={{
- flex: "1 1 0",
- minWidth: "min(85vw, 320px)",
- maxWidth: "640px",
-            }}
+            key={v.id}
+            data-frame
+            className="absolute"
+            style={{ left: x, top: y, width: w, height: h }}
           >
-            <div className="flex items-center gap-2 px-3 h-10 border-b border-[var(--border)]">
-              <span className="text-[13px] font-medium truncate">
+            {/* Index + label above the frame */}
+            <div className="absolute left-0 right-0 -top-9 flex items-center gap-2 text-[13px] truncate">
+              <span className="tabular-nums font-medium text-[var(--fg-subtle)]">
+                {i + 1}
+              </span>
+              <span className="font-medium text-[var(--fg)] truncate">
                 {v.label}
               </span>
-              {v.verdict !== "unset" && (
-                <span className="inline-flex items-center gap-1 text-[11px] text-[var(--fg-muted)]">
-                  <span
- className="dot"
- style={{ background: VERDICT_COLOR[v.verdict] }}
-                  />
-                  {VERDICT_LABEL[v.verdict]}
-                </span>
-              )}
-              <span className="ml-auto" />
-              <Button
- size="sm"
- variant="ghost"
- onClick={() => setVerdict(v.id, "winner")}
-              >
-                <Crown size={11} />
-                Pick this
-              </Button>
-              <Button
- size="icon-sm"
- variant="ghost"
- onClick={() => {
- setFocused(v.id);
- setViewMode("single");
-                }}
-              >
-                <span className="text-[10px]">Open</span>
-              </Button>
-              <Button
- size="icon-sm"
- variant="ghost"
- onClick={() => toggleCompare(v.id)}
-              >
-                <X size={12} />
-              </Button>
             </div>
-            <div className="relative flex-1 min-h-0 checkered">
-              <Thumb
- blobId={v.blobId}
- fit="contain"
- className="absolute inset-0"
- imageWidth={v.width}
- imageHeight={v.height}
- annotations={v.annotations}
-              />
+
+            <div
+              role="button"
+              tabIndex={0}
+              onDoubleClick={() => {
+                setFocused(v.id);
+                setViewMode("single");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  setFocused(v.id);
+                  setViewMode("single");
+                }
+              }}
+              onMouseEnter={() => setActiveFrameId(v.id)}
+              onMouseLeave={() =>
+                setActiveFrameId((cur) => (cur === v.id ? null : cur))
+              }
+              onFocus={() => setActiveFrameId(v.id)}
+              onBlur={() =>
+                setActiveFrameId((cur) => (cur === v.id ? null : cur))
+              }
+              className="relative block w-full h-full rounded-[20px] overflow-hidden bg-[var(--surface)] border border-[var(--border)] shadow-[var(--shadow-pop)] transition-shadow"
+              style={{ cursor: "inherit" }}
+            >
+              <div className="relative w-full h-full rounded-[inherit] overflow-hidden checkered">
+                <Thumb
+                  blobId={v.blobId}
+                  fit="contain"
+                  className="absolute inset-0"
+                  imageWidth={v.width}
+                  imageHeight={v.height}
+                  annotations={v.annotations}
+                  rounded="inherit"
+                />
+
+                {/* Verdict pill, top-left */}
+                {v.verdict !== "unset" && (
+                  <div
+                    className="absolute top-2.5 left-2.5 inline-flex items-center gap-1 px-1.5 h-[22px] rounded-[var(--radius-sm)] text-[11px] font-medium bg-[var(--surface)]/85 backdrop-blur-sm border border-[var(--border)] text-[var(--fg)]"
+                    style={{
+                      boxShadow:
+                        v.verdict === "winner"
+                          ? `inset 0 0 0 1px var(--winner)`
+                          : `inset 0 0 0 1px ${VERDICT_COLOR[v.verdict]}55`,
+                    }}
+                  >
+                    {v.verdict === "winner" ? (
+                      <Crown size={11} className="text-[var(--winner)]" />
+                    ) : (
+                      <span
+                        className="dot"
+                        style={{ background: VERDICT_COLOR[v.verdict] }}
+                      />
+                    )}
+                    {VERDICT_LABEL[v.verdict]}
+                  </div>
+                )}
+
+                {/* Hover actions, top-right. stopPropagation on pointer down so
+                    clicking a button never starts a canvas pan. */}
+                <div
+                  className={cn(
+                    "absolute top-2.5 right-2.5 flex items-center gap-1 transition-opacity",
+                    activeFrameId === v.id ? "opacity-100" : "opacity-0",
+                  )}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setVerdict(v.id, "winner")}
+                    aria-label="Pick this as winner"
+                    className="h-[26px] px-2 inline-flex items-center gap-1 rounded-[var(--radius-sm)] text-[11px] font-medium bg-[var(--surface)]/90 backdrop-blur-sm border border-[var(--border)] text-[var(--fg)] hover:bg-[var(--surface)] focus-ring"
+                  >
+                    <Crown size={11} />
+                    Pick
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFocused(v.id);
+                      setViewMode("single");
+                    }}
+                    aria-label="Open in single view"
+                    className="h-[26px] w-[26px] grid place-items-center rounded-[var(--radius-sm)] bg-[var(--surface)]/90 backdrop-blur-sm border border-[var(--border)] text-[var(--fg-muted)] hover:text-[var(--fg)] focus-ring"
+                  >
+                    <ArrowUpRight size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleCompare(v.id)}
+                    aria-label="Remove from compare"
+                    className="h-[26px] w-[26px] grid place-items-center rounded-[var(--radius-sm)] bg-[var(--surface)]/90 backdrop-blur-sm border border-[var(--border)] text-[var(--fg-muted)] hover:text-[var(--danger)] focus-ring"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         ))}
       </div>
+
+      {/* Top-left: back + count */}
+      <div className="absolute top-3 left-3 z-10 flex items-center gap-1 px-1 h-9 rounded-[var(--radius-md)] bg-[var(--surface)] border border-[var(--border)] shadow-[var(--shadow-pop)]">
+        <button
+          type="button"
+          onClick={() => setViewMode("board")}
+          className="h-7 px-2 inline-flex items-center gap-1 rounded-[var(--radius-sm)] text-[11.5px] text-[var(--fg-muted)] hover:text-[var(--fg)] hover:bg-[var(--bg-soft)] focus-ring"
+        >
+          <ArrowLeft size={12} />
+          Back
+        </button>
+        <span className="mx-0.5 h-4 w-px bg-[var(--border)]" />
+        <span className="px-2 text-[11.5px] text-[var(--fg-muted)] tabular-nums select-none">
+          Compare · {compareVersions.length}
+        </span>
+      </div>
+
+      {/* Top-center: zoom toolbar */}
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-0.5 px-1 h-9 rounded-[var(--radius-md)] bg-[var(--surface)] border border-[var(--border)] shadow-[var(--shadow-pop)]">
+        <span className="px-2 text-[11.5px] text-[var(--fg-muted)] tabular-nums select-none">
+          {Math.round(zoom * 100)}%
+        </span>
+        <button
+          type="button"
+          onClick={() => zoomAroundCenter(zoom / 1.2)}
+          className="h-7 w-7 grid place-items-center rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[var(--fg-muted)] hover:text-[var(--fg)] focus-ring"
+          aria-label="Zoom out"
+        >
+          <Minus size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => zoomAroundCenter(zoom * 1.2)}
+          className="h-7 w-7 grid place-items-center rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[var(--fg-muted)] hover:text-[var(--fg)] focus-ring"
+          aria-label="Zoom in"
+        >
+          <Plus size={12} />
+        </button>
+        <span className="mx-1 h-4 w-px bg-[var(--border)]" />
+        <button
+          type="button"
+          onClick={fitCamera}
+          className="h-7 px-2 text-[11.5px] rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] inline-flex items-center gap-1 text-[var(--fg-muted)] hover:text-[var(--fg)] focus-ring"
+        >
+          <Minimize2 size={11} /> Fit
+        </button>
+        <button
+          type="button"
+          onClick={actualSize}
+          className="h-7 px-2 text-[11.5px] rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] inline-flex items-center gap-1 text-[var(--fg-muted)] hover:text-[var(--fg)] focus-ring"
+        >
+          <Maximize2 size={11} /> 100%
+        </button>
+      </div>
+
+      {/* Top-right: add version */}
+      <div
+        className="absolute top-3 right-3 z-10"
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <PickerButton
+          candidates={candidates.map((v) => ({
+            id: v.id,
+            label: v.label,
+            blobId: v.thumbBlobId ?? v.blobId,
+          }))}
+          onPick={(id) => toggleCompare(id)}
+          onOpenChange={setPickerOpen}
+          open={pickerOpen}
+          align="right"
+        />
+      </div>
     </div>
   );
 }
- 
+
 function PickerButton({
- candidates,
- onPick,
- open,
- onOpenChange,
- disabled,
+  candidates,
+  onPick,
+  open,
+  onOpenChange,
+  disabled,
+  align = "right",
 }: {
- candidates: { id: string; label: string; blobId: string }[];
- onPick: (id: string) => void;
- open: boolean;
- onOpenChange: (b: boolean) => void;
- disabled?: boolean;
+  candidates: { id: string; label: string; blobId: string }[];
+  onPick: (id: string) => void;
+  open: boolean;
+  onOpenChange: (b: boolean) => void;
+  disabled?: boolean;
+  align?: "left" | "right";
 }) {
- return (
+  return (
     <div className="relative">
       <Button
- size="sm"
- variant="outline"
- onClick={() => onOpenChange(!open)}
- disabled={disabled}
+        size="sm"
+        variant="outline"
+        onClick={() => onOpenChange(!open)}
+        disabled={disabled}
       >
         Add version
         <ChevronDown size={12} />
@@ -185,14 +559,15 @@ function PickerButton({
       {open && (
         <>
           <div
- className="fixed inset-0 z-30"
- onClick={() => onOpenChange(false)}
+            className="fixed inset-0 z-30"
+            onClick={() => onOpenChange(false)}
           />
           <div
- className={cn(
- "absolute right-0 top-9 z-40 w-[260px] max-h-[320px] overflow-y-auto",
- "bg-[var(--surface)] border border-[var(--border)]",
- "rounded-[var(--radius-md)] shadow-[var(--shadow-modal)] pop-in py-1.5",
+            className={cn(
+              "absolute top-9 z-40 w-[260px] max-h-[320px] overflow-y-auto",
+              align === "right" ? "right-0" : "left-0",
+              "bg-[var(--surface)] border border-[var(--border)]",
+              "rounded-[var(--radius-md)] shadow-[var(--shadow-modal)] pop-in py-1.5",
             )}
           >
             {candidates.length === 0 && (
@@ -202,16 +577,16 @@ function PickerButton({
             )}
             {candidates.map((c) => (
               <button
- key={c.id}
- onClick={() => {
- onPick(c.id);
- onOpenChange(false);
+                key={c.id}
+                onClick={() => {
+                  onPick(c.id);
+                  onOpenChange(false);
                 }}
- className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-[var(--bg-soft)]"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-[var(--bg-soft)]"
               >
                 <Thumb
- blobId={c.blobId}
- className="w-7 h-9 rounded-[4px] shrink-0"
+                  blobId={c.blobId}
+                  className="w-7 h-9 rounded-[4px] shrink-0"
                 />
                 <span className="text-[12.5px]">{c.label}</span>
               </button>
