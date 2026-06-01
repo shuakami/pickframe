@@ -38,11 +38,12 @@ export function CompareView() {
       <div className="absolute inset-0 grid place-items-center px-6 text-center">
         <div className="max-w-[400px]">
           <h2 className="text-[18px] font-semibold tracking-tight">
-            Pick 2–4 to compare
+            Pick 2 or more to compare
           </h2>
           <p className="mt-2 text-[13px] text-[var(--fg-muted)]">
             Shift- or ⌘-click cards on the board, then hit&nbsp;
-            <b>Compare</b>. Or add versions from the menu below.
+            <b>Compare</b> — or use <b>Compare all</b> on a page header to
+            line up every version. Add more from the menu below.
           </p>
           <div className="mt-4 flex justify-center">
             <PickerButton
@@ -61,7 +62,6 @@ export function CompareView() {
     );
   }
  
- const cols = compareVersions.length;
  return (
     <div className="absolute inset-0 flex flex-col bg-[var(--bg-soft)]">
       <div className="h-10 shrink-0 flex items-center gap-2 px-3 border-b border-[var(--border)] bg-[var(--bg)]">
@@ -85,23 +85,21 @@ export function CompareView() {
  onPick={(id) => toggleCompare(id)}
  onOpenChange={setPickerOpen}
  open={pickerOpen}
- disabled={compareVersions.length >= 4}
         />
       </div>
-      <div
- className="flex-1 min-h-0 grid gap-3 p-3 sm:p-4 overflow-y-auto"
- style={{
- // Mobile: each panel gets full width and stacks. Desktop: side by side.
- gridTemplateColumns: `repeat(auto-fit, minmax(min(280px, 100%), 1fr))`,
- // Cap to compare slots so 2 mocks don't stretch into 4 columns on huge screens.
- gridAutoFlow: "row",
-        }}
-        data-cols={cols}
-      >
+      {/* One scrollable row of panels so any number of versions lay out side
+          by side — 2 fill the width, many overflow into a horizontal scroll
+          (each panel keeps a comfortable min width). */}
+      <div className="flex-1 min-h-0 flex gap-3 p-3 sm:p-4 overflow-x-auto overflow-y-hidden">
         {compareVersions.map((v) => (
           <div
  key={v.id}
- className="relative flex flex-col bg-[var(--surface)] border border-[var(--border)] rounded-[var(--radius-lg)] overflow-hidden min-h-[320px]"
+ className="relative flex flex-col h-full bg-[var(--surface)] border border-[var(--border)] rounded-[var(--radius-lg)] overflow-hidden"
+ style={{
+ flex: "1 1 0",
+ minWidth: "min(85vw, 320px)",
+ maxWidth: "640px",
+            }}
           >
             <div className="flex items-center gap-2 px-3 h-10 border-b border-[var(--border)]">
               <span className="text-[13px] font-medium truncate">

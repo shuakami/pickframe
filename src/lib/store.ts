@@ -36,7 +36,7 @@ interface UIState {
  activeProjectId: string | null;
  /** When in single view, which version is open. Also drives Inspector. */
  focusedVersionId: string | null;
- /** When in compare view, which versions are pinned (max 4). */
+ /** When in compare view, which versions are pinned (any number, laid out side by side). */
  compareIds: string[];
  /** Multi-select set (board view). */
  selectedIds: Set<string>;
@@ -116,6 +116,7 @@ interface Actions {
  setSelected: (ids: string[]) => void;
  setFocused: (id: string | null) => void;
  toggleCompare: (id: string) => void;
+ setCompare: (ids: string[]) => void;
  
  // Filter
  setFilter: (f: Partial<FilterQuery>) => void;
@@ -613,11 +614,14 @@ export const useStore = create<Store>()(
  set((s) => {
  if (s.compareIds.includes(id)) {
           s.compareIds = s.compareIds.filter((x) => x !== id);
-        } else if (s.compareIds.length < 4) {
-          s.compareIds = [...s.compareIds, id];
         } else {
-          s.compareIds = [...s.compareIds.slice(1), id];
+          s.compareIds = [...s.compareIds, id];
         }
+      });
+    },
+ setCompare(ids) {
+ set((s) => {
+        s.compareIds = [...ids];
       });
     },
  
