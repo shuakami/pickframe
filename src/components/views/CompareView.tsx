@@ -4,6 +4,7 @@ import * as React from "react";
 import { useStore } from "@/lib/store";
 import { Thumb } from "../primitives/Thumb";
 import { Button } from "../primitives/Button";
+import * as ContextMenu from "@radix-ui/react-context-menu";
 import {
   ChevronDown,
   X,
@@ -14,9 +15,21 @@ import {
   Maximize2,
   ArrowLeft,
   ArrowUpRight,
+  ImageIcon,
+  ClipboardCopy,
+  Download,
+  CircleDashed,
+  ChevronRight,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { VERDICT_COLOR, VERDICT_LABEL } from "@/lib/types";
+import {
+  VERDICT_COLOR,
+  VERDICT_LABEL,
+  VERDICTS,
+  type Verdict,
+} from "@/lib/types";
+import { copyImageToClipboard, saveImageToDisk } from "@/lib/imageActions";
 
 /**
  * Compare — a pannable, zoomable canvas (same camera as Flow) that lays out
@@ -100,6 +113,17 @@ export function CompareView() {
   const [zoom, setZoom] = React.useState(1);
   const [pan, setPan] = React.useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = React.useState(false);
+  // While panning/zooming we keep the world on its own GPU layer
+  // (translate3d + will-change) for smoothness; at rest we drop to a plain 2D
+  // transform so the browser re-rasterizes the images crisply at the current
+  // zoom instead of GPU-upscaling a cached low-res bitmap (which looked blurry).
+  const [isZooming, setIsZooming] = React.useState(false);
+  const zoomIdleRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markZooming = React.useCallback(() => {
+    setIsZooming(true);
+    if (zoomIdleRef.current) clearTimeout(zoomIdleRef.current);
+    zoomIdleRef.current = setTimeout(() => setIsZooming(false), 180);
+  }, []);
   const wrapRef = React.useRef<HTMLDivElement>(null);
   const draggingRef = React.useRef<{
     baseX: number;
@@ -141,6 +165,7 @@ export function CompareView() {
 
   // Wheel: plain scroll zooms around the cursor; shift / trackpad pans.
   const onWheel = (e: React.WheelEvent) => {
+    markZooming();
     const isPinch = e.ctrlKey || e.metaKey;
     const isTrackpadPan = !isPinch && Math.abs(e.deltaX) > 0;
     if (e.shiftKey && !isPinch) {
@@ -187,7 +212,9 @@ export function CompareView() {
   } | null>(null);
 
   const onPointerDown = (e: React.PointerEvent) => {
-    if (e.pointerType === "mouse" && e.button !== 0 && e.button !== 2) return;
+    // Only the left button pans. Right-click is reserved for the context menu;
+    // middle / back / forward are ignored.
+    if (e.pointerType === "mouse" && e.button !== 0) return;
     pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     if (pointersRef.current.size === 1) {
@@ -303,6 +330,8 @@ export function CompareView() {
     );
   }
 
+  const interacting = isDragging || isZooming;
+
   return (
     <div
       ref={wrapRef}
@@ -311,6 +340,7 @@ export function CompareView() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onContextMenu={(e) => e.preventDefault()}
       className="absolute inset-2 overflow-hidden bg-[var(--bg-soft)] select-none rounded-[var(--radius-lg)] border border-[var(--border)]"
       style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
     >
@@ -332,8 +362,10 @@ export function CompareView() {
         style={{
           width: totalW,
           height: totalH,
-          transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
-          willChange: "transform",
+          transform: interacting
+            ? `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`
+            : `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          willChange: interacting ? "transform" : "auto",
         }}
       >
         {frames.map(({ v, x, y, w, h }, i) => (
@@ -353,6 +385,8 @@ export function CompareView() {
               </span>
             </div>
 
+            <ContextMenu.Root>
+            <ContextMenu.Trigger asChild>
             <div
               role="button"
               tabIndex={0}
@@ -451,6 +485,105 @@ export function CompareView() {
                 </div>
               </div>
             </div>
+            </ContextMenu.Trigger>
+            <ContextMenu.Portal>
+              <ContextMenu.Content
+                className={cn(
+                  "z-[60] min-w-[200px] p-1",
+                  "bg-[var(--surface)] border border-[var(--border)]",
+                  "rounded-[var(--radius-md)] shadow-[var(--shadow-pop)]",
+                  "data-[state=open]:animate-cm-in data-[state=closed]:animate-cm-out",
+                )}
+              >
+                <MenuItem
+                  onSelect={() => copyImageToClipboard(v.blobId)}
+                  icon={<ClipboardCopy size={12} />}
+                  label="Copy image"
+                />
+                <MenuItem
+                  onSelect={() =>
+                    saveImageToDisk(v.blobId, v.label || "version")
+                  }
+                  icon={<Download size={12} />}
+                  label="Save image…"
+                />
+                <ContextMenu.Separator className="h-px bg-[var(--border)] my-1 -mx-1" />
+                <MenuItem
+                  onSelect={() => {
+                    setFocused(v.id);
+                    setViewMode("single");
+                  }}
+                  icon={<ImageIcon size={12} />}
+                  label="Open in single view"
+                />
+                <MenuItem
+                  onSelect={() => setVerdict(v.id, "winner")}
+                  icon={<Crown size={12} className="text-[var(--winner)]" />}
+                  label="Pick as winner"
+                />
+                <ContextMenu.Sub>
+                  <ContextMenu.SubTrigger className="flex items-center gap-2 px-2 py-1.5 text-[12.5px] text-[var(--fg)] data-[state=open]:bg-[var(--bg-soft)] hover:bg-[var(--bg-soft)] rounded-[var(--radius-sm)] cursor-default outline-none">
+                    <span className="text-[var(--fg-subtle)]">
+                      <CircleDashed size={12} />
+                    </span>
+                    <span className="flex-1">Set verdict</span>
+                    <ChevronRight size={12} className="text-[var(--fg-subtle)]" />
+                  </ContextMenu.SubTrigger>
+                  <ContextMenu.Portal>
+                    <ContextMenu.SubContent
+                      sideOffset={4}
+                      className={cn(
+                        "min-w-[160px] p-1",
+                        "bg-[var(--surface)] border border-[var(--border)]",
+                        "rounded-[var(--radius-md)] shadow-[var(--shadow-pop)]",
+                        "data-[state=open]:animate-cm-in data-[state=closed]:animate-cm-out",
+                      )}
+                    >
+                      {VERDICTS.map((vd) => (
+                        <MenuItem
+                          key={vd}
+                          onSelect={() => setVerdict(v.id, vd as Verdict)}
+                          icon={
+                            vd === "winner" ? (
+                              <Crown size={12} className="text-[var(--winner)]" />
+                            ) : (
+                              <span
+                                className="dot"
+                                style={{
+                                  background:
+                                    vd === "unset"
+                                      ? "transparent"
+                                      : VERDICT_COLOR[vd as Verdict],
+                                  outline:
+                                    vd === "unset"
+                                      ? "1px dashed var(--fg-subtle)"
+                                      : undefined,
+                                  outlineOffset: vd === "unset" ? -1 : undefined,
+                                }}
+                              />
+                            )
+                          }
+                          label={VERDICT_LABEL[vd as Verdict]}
+                          trailing={
+                            v.verdict === vd ? (
+                              <Check size={11} className="text-[var(--fg-muted)]" />
+                            ) : null
+                          }
+                        />
+                      ))}
+                    </ContextMenu.SubContent>
+                  </ContextMenu.Portal>
+                </ContextMenu.Sub>
+                <ContextMenu.Separator className="h-px bg-[var(--border)] my-1 -mx-1" />
+                <MenuItem
+                  onSelect={() => toggleCompare(v.id)}
+                  icon={<X size={12} />}
+                  label="Remove from compare"
+                  tone="danger"
+                />
+              </ContextMenu.Content>
+            </ContextMenu.Portal>
+            </ContextMenu.Root>
           </div>
         ))}
       </div>
@@ -595,5 +728,42 @@ function PickerButton({
         </>
       )}
     </div>
+  );
+}
+
+function MenuItem({
+  onSelect,
+  icon,
+  label,
+  trailing,
+  tone,
+}: {
+  onSelect: () => void;
+  icon?: React.ReactNode;
+  label: string;
+  trailing?: React.ReactNode;
+  tone?: "danger";
+}) {
+  return (
+    <ContextMenu.Item
+      onSelect={onSelect}
+      className={cn(
+        "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] text-[12.5px] cursor-default outline-none",
+        tone === "danger"
+          ? "text-[var(--danger)] data-[highlighted]:bg-[color-mix(in_srgb,var(--danger)_10%,transparent)]"
+          : "text-[var(--fg)] data-[highlighted]:bg-[var(--bg-soft)]",
+      )}
+    >
+      <span
+        className={cn(
+          "shrink-0",
+          tone === "danger" ? "" : "text-[var(--fg-subtle)]",
+        )}
+      >
+        {icon}
+      </span>
+      <span className="flex-1 truncate">{label}</span>
+      {trailing}
+    </ContextMenu.Item>
   );
 }
