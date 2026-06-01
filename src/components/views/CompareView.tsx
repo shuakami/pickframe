@@ -154,14 +154,16 @@ export function CompareView() {
     setPan({ x: (r.width - totalW) / 2, y: 40 });
   }, [totalW]);
 
-  // Re-fit when the scene changes (project / number of frames / total size).
-  const fitKey = `${activeProjectId ?? "_"}:${frames.length}:${totalW}`;
-  const lastFitKeyRef = React.useRef<string | null>(null);
+  // Auto-fit only once per project (on first load / when switching projects).
+  // Adding or removing a version must NOT yank the camera — that was jarring.
+  const lastFitProjectRef = React.useRef<string | null>(null);
   React.useLayoutEffect(() => {
-    if (lastFitKeyRef.current === fitKey) return;
-    lastFitKeyRef.current = fitKey;
+    const key = activeProjectId ?? "_";
+    if (lastFitProjectRef.current === key) return;
+    if (frames.length === 0) return; // wait until there's something to frame
+    lastFitProjectRef.current = key;
     fitCamera();
-  }, [fitKey, fitCamera]);
+  }, [activeProjectId, frames.length, fitCamera]);
 
   // Wheel: plain scroll zooms around the cursor; shift / trackpad pans.
   const onWheel = (e: React.WheelEvent) => {
@@ -212,6 +214,13 @@ export function CompareView() {
   } | null>(null);
 
   const onPointerDown = (e: React.PointerEvent) => {
+    // React portals bubble events through the React tree, not the DOM tree, so
+    // a click on the right-click menu (rendered in a portal on document.body)
+    // reaches this handler. If we let it run, setPointerCapture below would
+    // steal the pointer and the menu item's own click/onSelect would never
+    // fire. Ignore any pointer that didn't physically land in the canvas DOM.
+    const target = e.target as Node | null;
+    if (target && wrapRef.current && !wrapRef.current.contains(target)) return;
     // Only the left button pans. Right-click is reserved for the context menu;
     // middle / back / forward are ignored.
     if (e.pointerType === "mouse" && e.button !== 0) return;
