@@ -210,7 +210,8 @@ export function TopBar({
             />
             <BreadcrumbMenu
               ariaLabel="Switch project"
-              triggerClassName="hidden sm:flex items-center gap-1.5 pl-1.5 pr-1 h-7 rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[12.5px] data-[state=open]:bg-[var(--bg-soft)]"
+              wrapClassName="hidden sm:block"
+              triggerClassName="flex items-center gap-1.5 px-1.5 h-7 rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[12.5px]"
               trigger={
                 <>
                   {project.emoji && <span>{project.emoji}</span>}
@@ -256,7 +257,8 @@ export function TopBar({
             />
             <BreadcrumbMenu
               ariaLabel="Switch page"
-              triggerClassName="hidden md:flex items-center gap-1 pl-1.5 pr-1 h-7 rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[12.5px] text-[var(--fg-muted)] data-[state=open]:bg-[var(--bg-soft)]"
+              wrapClassName="hidden md:block"
+              triggerClassName="flex items-center px-1.5 h-7 rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[12.5px] text-[var(--fg-muted)] max-w-[220px]"
               trigger={
                 <span className="truncate max-w-[200px]">
                   <PageLabel name={page.name} />
@@ -277,7 +279,7 @@ export function TopBar({
                     }}
                   />
                   {projectPages.length > 0 && (
-                    <DropdownMenu.Separator className="my-1 h-px bg-[var(--border)]" />
+                    <div className="my-1 h-px bg-[var(--border)]" />
                   )}
                   {projectPages.map((pg) => (
                     <BreadcrumbItem
@@ -497,17 +499,21 @@ export function TopBar({
   );
 }
  
-// Breadcrumb quick-jump menu. Opens on hover (with a small grace delay so the
-// pointer can travel into the panel without it closing) as well as on click /
-// keyboard, so it works on touch and for a11y too.
+// Breadcrumb quick-jump menu. Opens on hover. The trigger and the menu live in
+// one `relative` hover container (the menu is a DOM descendant, positioned
+// absolutely with no gap), so moving the pointer from the label into the menu
+// never leaves the container — no dead zone, no open/close flicker. Click still
+// toggles it for touch/keyboard.
 function BreadcrumbMenu({
  ariaLabel,
  triggerClassName,
+ wrapClassName,
  trigger,
  children,
 }: {
  ariaLabel: string;
  triggerClassName?: string;
+ wrapClassName?: string;
  trigger: React.ReactNode;
  children: (close: () => void) => React.ReactNode;
 }) {
@@ -525,49 +531,40 @@ function BreadcrumbMenu({
   };
  const closeSoon = () => {
  cancel();
- timer.current = setTimeout(() => setOpen(false), 140);
+ timer.current = setTimeout(() => setOpen(false), 120);
   };
  React.useEffect(() => cancel, []);
  return (
-    <DropdownMenu.Root open={open} onOpenChange={setOpen}>
-      <DropdownMenu.Trigger asChild>
-        <button
- type="button"
- aria-label={ariaLabel}
- className={triggerClassName}
+    <div
+ className={cn("relative", wrapClassName)}
  onPointerEnter={(e) => {
  if (e.pointerType !== "touch") openNow();
-          }}
+      }}
  onPointerLeave={(e) => {
  if (e.pointerType !== "touch") closeSoon();
-          }}
+      }}
+    >
+      <button
+ type="button"
+ aria-label={ariaLabel}
+ aria-haspopup="menu"
+ aria-expanded={open}
+ className={cn(triggerClassName, open && "bg-[var(--bg-soft)]")}
+ onClick={() => setOpen((o) => !o)}
+      >
+        {trigger}
+      </button>
+      {open && (
+        <div
+ role="menu"
+ className="absolute left-0 top-full pt-1 z-[60]"
         >
-          {trigger}
-          <ChevronDown
- size={11}
- className="text-[var(--fg-subtle)] opacity-70 shrink-0"
- aria-hidden
-          />
-        </button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
- align="start"
- sideOffset={4}
- onPointerEnter={openNow}
- onPointerLeave={closeSoon}
- onCloseAutoFocus={(e) => e.preventDefault()}
- className={cn(
- "z-[60] min-w-[200px] max-h-[60vh] overflow-y-auto p-1",
- "bg-[var(--surface)] border border-[var(--border)]",
- "rounded-[var(--radius-md)] shadow-[var(--shadow-pop)]",
- "data-[state=open]:animate-cm-in data-[state=closed]:animate-cm-out",
-          )}
-        >
-          {children(() => setOpen(false))}
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+          <div className="min-w-[200px] max-h-[60vh] overflow-y-auto p-1 bg-[var(--surface)] border border-[var(--border)] rounded-[var(--radius-md)] shadow-[var(--shadow-pop)] animate-cm-in">
+            {children(() => setOpen(false))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -583,11 +580,13 @@ function BreadcrumbItem({
  onSelect: () => void;
 }) {
  return (
-    <DropdownMenu.Item
- onSelect={onSelect}
+    <button
+ type="button"
+ role="menuitem"
+ onClick={onSelect}
  className={cn(
- "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] text-[12.5px] cursor-default outline-none",
- "text-[var(--fg)] data-[highlighted]:bg-[var(--bg-soft)]",
+ "w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] text-[12.5px] text-left outline-none",
+ "text-[var(--fg)] hover:bg-[var(--bg-soft)] focus-visible:bg-[var(--bg-soft)]",
       )}
     >
       {icon && <span className="shrink-0">{icon}</span>}
@@ -595,7 +594,7 @@ function BreadcrumbItem({
       {active && (
         <Check size={12} className="text-[var(--fg-muted)] shrink-0" />
       )}
-    </DropdownMenu.Item>
+    </button>
   );
 }
 
