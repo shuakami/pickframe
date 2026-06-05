@@ -300,3 +300,31 @@ body {
  white-space: nowrap;
  border: 0;
 }
+
+/* Floating canvas chrome (Compare / Flow top toolbars). Tucks up out of the
+   way when zoomed content slides under it; peeks back when the pointer nears
+   the top edge. Toggled imperatively via data- attributes so panning never
+   triggers a React render. */
+.pf-chrome {
+ transition:
+  transform 0.18s cubic-bezier(0.4, 0, 0.2, 1),
+  opacity 0.18s ease;
+ pointer-events: none;
+}
+.pf-chrome > * {
+ pointer-events: auto;
+}
+.pf-chrome[data-tuck="true"] {
+ transform: translateY(-130%);
+ opacity: 0;
+}
+.pf-chrome[data-tuck="true"] > * {
+ pointer-events: none;
+}
+.pf-chrome[data-peek="true"] {
+ transform: none;
+ opacity: 1;
+}
+.pf-chrome[data-peek="true"] > * {
+ pointer-events: auto;
+}

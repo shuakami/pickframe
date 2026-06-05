@@ -23,6 +23,7 @@ import {
   Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { usePanZoom } from "@/lib/usePanZoom";
 import {
   VERDICT_COLOR,
   VERDICT_LABEL,
@@ -109,50 +110,29 @@ export function CompareView() {
       : HPAD * 2;
   const totalH = FRAME_HEIGHT + VPAD * 2;
 
-  // Camera (pan in viewport px, zoom is a multiplier).
-  const [zoom, setZoom] = React.useState(1);
-  const [pan, setPan] = React.useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = React.useState(false);
-  // While panning/zooming we keep the world on its own GPU layer
-  // (translate3d + will-change) for smoothness; at rest we drop to a plain 2D
-  // transform so the browser re-rasterizes the images crisply at the current
-  // zoom instead of GPU-upscaling a cached low-res bitmap (which looked blurry).
-  const [isZooming, setIsZooming] = React.useState(false);
-  const zoomIdleRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const markZooming = React.useCallback(() => {
-    setIsZooming(true);
-    if (zoomIdleRef.current) clearTimeout(zoomIdleRef.current);
-    zoomIdleRef.current = setTimeout(() => setIsZooming(false), 180);
-  }, []);
-  const wrapRef = React.useRef<HTMLDivElement>(null);
-  const draggingRef = React.useRef<{
-    baseX: number;
-    baseY: number;
-    startX: number;
-    startY: number;
-  } | null>(null);
-
-  const fitCamera = React.useCallback(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    if (r.width <= 0 || r.height <= 0) return;
-    const margin = 64;
-    const s = Math.min(
-      1,
-      Math.min((r.width - margin) / totalW, (r.height - margin) / totalH),
-    );
-    setZoom(s);
-    setPan({ x: (r.width - totalW * s) / 2, y: (r.height - totalH * s) / 2 });
-  }, [totalW, totalH]);
-
-  const actualSize = React.useCallback(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setZoom(1);
-    setPan({ x: (r.width - totalW) / 2, y: 40 });
-  }, [totalW]);
+  // Pannable / zoomable camera (see usePanZoom). Each frame's label sits 36px
+  // above it, so that's where visible content begins for the chrome auto-tuck.
+  const {
+    wrapRef,
+    worldRef,
+    zoomReadoutRef,
+    chromeRef,
+    zoom,
+    pan,
+    interacting,
+    isPanning,
+    onWheel,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    fit,
+    actualSize,
+    zoomBy,
+  } = usePanZoom({
+    totalW,
+    totalH,
+    contentTopWorldY: VPAD - 36,
+  });
 
   // Auto-fit only once per project (on first load / when switching projects).
   // Adding or removing a version must NOT yank the camera — that was jarring.
@@ -162,148 +142,8 @@ export function CompareView() {
     if (lastFitProjectRef.current === key) return;
     if (frames.length === 0) return; // wait until there's something to frame
     lastFitProjectRef.current = key;
-    fitCamera();
-  }, [activeProjectId, frames.length, fitCamera]);
-
-  // Wheel: plain scroll zooms around the cursor; shift / trackpad pans.
-  const onWheel = (e: React.WheelEvent) => {
-    markZooming();
-    const isPinch = e.ctrlKey || e.metaKey;
-    const isTrackpadPan = !isPinch && Math.abs(e.deltaX) > 0;
-    if (e.shiftKey && !isPinch) {
-      setPan((p) => ({ x: p.x - e.deltaY, y: p.y }));
-      return;
-    }
-    if (isTrackpadPan) {
-      setPan((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
-      return;
-    }
-    const r = wrapRef.current?.getBoundingClientRect();
-    if (!r) return;
-    const mx = e.clientX - r.left;
-    const my = e.clientY - r.top;
-    const wx = (mx - pan.x) / zoom;
-    const wy = (my - pan.y) / zoom;
-    const next = Math.max(0.1, Math.min(3, zoom * (1 - e.deltaY * 0.0018)));
-    setZoom(next);
-    setPan({ x: mx - wx * next, y: my - wy * next });
-  };
-
-  const zoomAroundCenter = (next: number) => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const cx = r.width / 2;
-    const cy = r.height / 2;
-    const wx = (cx - pan.x) / zoom;
-    const wy = (cy - pan.y) / zoom;
-    const clamped = Math.max(0.1, Math.min(3, next));
-    setZoom(clamped);
-    setPan({ x: cx - wx * clamped, y: cy - wy * clamped });
-  };
-
-  // Pointer-based pan (1 pointer) + pinch zoom (2 pointers).
-  const pointersRef = React.useRef<Map<number, { x: number; y: number }>>(
-    new Map(),
-  );
-  const pinchRef = React.useRef<{
-    startDist: number;
-    startZoom: number;
-    worldX: number;
-    worldY: number;
-  } | null>(null);
-
-  const onPointerDown = (e: React.PointerEvent) => {
-    // React portals bubble events through the React tree, not the DOM tree, so
-    // a click on the right-click menu (rendered in a portal on document.body)
-    // reaches this handler. If we let it run, setPointerCapture below would
-    // steal the pointer and the menu item's own click/onSelect would never
-    // fire. Ignore any pointer that didn't physically land in the canvas DOM.
-    const target = e.target as Node | null;
-    if (target && wrapRef.current && !wrapRef.current.contains(target)) return;
-    // Only the left button pans. Right-click is reserved for the context menu;
-    // middle / back / forward are ignored.
-    if (e.pointerType === "mouse" && e.button !== 0) return;
-    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    if (pointersRef.current.size === 1) {
-      draggingRef.current = {
-        baseX: pan.x,
-        baseY: pan.y,
-        startX: e.clientX,
-        startY: e.clientY,
-      };
-      setIsDragging(true);
-    } else if (pointersRef.current.size === 2) {
-      draggingRef.current = null;
-      const pts = Array.from(pointersRef.current.values());
-      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
-      const mx = (pts[0].x + pts[1].x) / 2;
-      const my = (pts[0].y + pts[1].y) / 2;
-      const r = wrapRef.current?.getBoundingClientRect();
-      const lx = r ? mx - r.left : mx;
-      const ly = r ? my - r.top : my;
-      pinchRef.current = {
-        startDist: dist,
-        startZoom: zoom,
-        worldX: (lx - pan.x) / zoom,
-        worldY: (ly - pan.y) / zoom,
-      };
-    }
-  };
-
-  const onPointerMove = (e: React.PointerEvent) => {
-    if (!pointersRef.current.has(e.pointerId)) return;
-    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-    if (pointersRef.current.size === 2 && pinchRef.current) {
-      const pts = Array.from(pointersRef.current.values());
-      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
-      const next = Math.max(
-        0.1,
-        Math.min(3, pinchRef.current.startZoom * (dist / pinchRef.current.startDist)),
-      );
-      const mx = (pts[0].x + pts[1].x) / 2;
-      const my = (pts[0].y + pts[1].y) / 2;
-      const r = wrapRef.current?.getBoundingClientRect();
-      const lx = r ? mx - r.left : mx;
-      const ly = r ? my - r.top : my;
-      setZoom(next);
-      setPan({
-        x: lx - pinchRef.current.worldX * next,
-        y: ly - pinchRef.current.worldY * next,
-      });
-      return;
-    }
-    const d = draggingRef.current;
-    if (!d) return;
-    setPan({
-      x: d.baseX + (e.clientX - d.startX),
-      y: d.baseY + (e.clientY - d.startY),
-    });
-  };
-
-  const onPointerUp = (e: React.PointerEvent) => {
-    pointersRef.current.delete(e.pointerId);
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    if (pointersRef.current.size < 2) pinchRef.current = null;
-    if (pointersRef.current.size === 0) {
-      draggingRef.current = null;
-      setIsDragging(false);
-    } else if (pointersRef.current.size === 1) {
-      const remaining = Array.from(pointersRef.current.values())[0];
-      draggingRef.current = {
-        baseX: pan.x,
-        baseY: pan.y,
-        startX: remaining.x,
-        startY: remaining.y,
-      };
-    }
-  };
+    fit();
+  }, [activeProjectId, frames.length, fit]);
 
   if (compareVersions.length === 0) {
     return (
@@ -339,8 +179,6 @@ export function CompareView() {
     );
   }
 
-  const interacting = isDragging || isZooming;
-
   return (
     <div
       ref={wrapRef}
@@ -351,7 +189,7 @@ export function CompareView() {
       onPointerCancel={onPointerUp}
       onContextMenu={(e) => e.preventDefault()}
       className="absolute inset-2 overflow-hidden bg-[var(--bg-soft)] select-none rounded-[var(--radius-lg)] border border-[var(--border)]"
-      style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
+      style={{ cursor: isPanning ? "grabbing" : "grab", touchAction: "none" }}
     >
       {/* Dotted background grid for canvas feel */}
       <div
@@ -367,6 +205,7 @@ export function CompareView() {
 
       {/* World */}
       <div
+        ref={worldRef}
         className="absolute top-0 left-0 origin-top-left"
         style={{
           width: totalW,
@@ -382,7 +221,16 @@ export function CompareView() {
             key={v.id}
             data-frame
             className="absolute"
-            style={{ left: x, top: y, width: w, height: h }}
+            style={{
+              left: x,
+              top: y,
+              width: w,
+              height: h,
+              // Skip rendering/decoding frames that are off-screen so a board
+              // of many high-res screens paints instantly; full res preserved.
+              contentVisibility: "auto",
+              containIntrinsicSize: `${w}px ${h}px`,
+            }}
           >
             {/* Index + label above the frame */}
             <div className="absolute left-0 right-0 -top-9 flex items-center gap-2 text-[13px] truncate">
@@ -597,8 +445,11 @@ export function CompareView() {
         ))}
       </div>
 
+      {/* Floating top chrome — auto-tucks out of the way when zoomed content
+          slides under it, and peeks back when the pointer nears the top edge. */}
+      <div ref={chromeRef} className="pf-chrome absolute inset-x-0 top-0 z-10">
       {/* Top-left: back + count */}
-      <div className="absolute top-3 left-3 z-10 flex items-center gap-1 px-1 h-9 rounded-[var(--radius-md)] bg-[var(--surface)] border border-[var(--border)] shadow-[var(--shadow-pop)]">
+      <div className="absolute top-3 left-3 flex items-center gap-1 px-1 h-9 rounded-[var(--radius-md)] bg-[var(--surface)] border border-[var(--border)] shadow-[var(--shadow-pop)]">
         <button
           type="button"
           onClick={() => setViewMode("board")}
@@ -614,13 +465,16 @@ export function CompareView() {
       </div>
 
       {/* Top-center: zoom toolbar */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-0.5 px-1 h-9 rounded-[var(--radius-md)] bg-[var(--surface)] border border-[var(--border)] shadow-[var(--shadow-pop)]">
-        <span className="px-2 text-[11.5px] text-[var(--fg-muted)] tabular-nums select-none">
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-0.5 px-1 h-9 rounded-[var(--radius-md)] bg-[var(--surface)] border border-[var(--border)] shadow-[var(--shadow-pop)]">
+        <span
+          ref={zoomReadoutRef}
+          className="px-2 text-[11.5px] text-[var(--fg-muted)] tabular-nums select-none"
+        >
           {Math.round(zoom * 100)}%
         </span>
         <button
           type="button"
-          onClick={() => zoomAroundCenter(zoom / 1.2)}
+          onClick={() => zoomBy(1 / 1.2)}
           className="h-7 w-7 grid place-items-center rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[var(--fg-muted)] hover:text-[var(--fg)] focus-ring"
           aria-label="Zoom out"
         >
@@ -628,7 +482,7 @@ export function CompareView() {
         </button>
         <button
           type="button"
-          onClick={() => zoomAroundCenter(zoom * 1.2)}
+          onClick={() => zoomBy(1.2)}
           className="h-7 w-7 grid place-items-center rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[var(--fg-muted)] hover:text-[var(--fg)] focus-ring"
           aria-label="Zoom in"
         >
@@ -637,7 +491,7 @@ export function CompareView() {
         <span className="mx-1 h-4 w-px bg-[var(--border)]" />
         <button
           type="button"
-          onClick={fitCamera}
+          onClick={fit}
           className="h-7 px-2 text-[11.5px] rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] inline-flex items-center gap-1 text-[var(--fg-muted)] hover:text-[var(--fg)] focus-ring"
         >
           <Minimize2 size={11} /> Fit
@@ -653,7 +507,7 @@ export function CompareView() {
 
       {/* Top-right: add version */}
       <div
-        className="absolute top-3 right-3 z-10"
+        className="absolute top-3 right-3"
         onPointerDown={(e) => e.stopPropagation()}
       >
         <PickerButton
@@ -667,6 +521,7 @@ export function CompareView() {
           open={pickerOpen}
           align="right"
         />
+      </div>
       </div>
     </div>
   );

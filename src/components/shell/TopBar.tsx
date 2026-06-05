@@ -28,6 +28,7 @@ import {
   Menu,
   Upload,
   PackageOpen,
+  Check,
 } from "lucide-react";
 
 // Custom sidebar toggle icon — small filled-panel glyph that reads more
@@ -83,9 +84,19 @@ export function TopBar({
  const addPage = useStore((s) => s.addPage);
  const addTag = useStore((s) => s.addTag);
  const setActiveProject = useStore((s) => s.setActiveProject);
+ const setActivePage = useStore((s) => s.setActivePage);
  
  const project = projects.find((p) => p.id === activeProjectId);
  const page = pages.find((p) => p.id === activePageId);
+
+ // Pages of the active project, in board order — for the breadcrumb quick-jump.
+ const projectPages = React.useMemo(
+   () =>
+     pages
+       .filter((p) => p.projectId === activeProjectId)
+       .sort((a, b) => a.order - b.order),
+   [pages, activeProjectId],
+ );
  
  const filterCount =
     (filter.tagIds?.length ?? 0) +
@@ -197,15 +208,43 @@ export function TopBar({
  className="text-[var(--fg-subtle)] mx-0.5 hidden sm:block"
  aria-hidden
             />
-            <button
- onClick={() => useStore.getState().setActivePage(null)}
- className="hidden sm:flex items-center gap-1.5 px-1.5 h-7 rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[12.5px]"
+            <BreadcrumbMenu
+              ariaLabel="Switch project"
+              triggerClassName="hidden sm:flex items-center gap-1.5 pl-1.5 pr-1 h-7 rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[12.5px] data-[state=open]:bg-[var(--bg-soft)]"
+              trigger={
+                <>
+                  {project.emoji && <span>{project.emoji}</span>}
+                  <span className="font-medium truncate max-w-[140px]">
+                    {project.name}
+                  </span>
+                </>
+              }
             >
-              {project.emoji && <span>{project.emoji}</span>}
-              <span className="font-medium truncate max-w-[140px]">
-                {project.name}
-              </span>
-            </button>
+              {(close) =>
+                projects.map((p) => (
+                  <BreadcrumbItem
+                    key={p.id}
+                    active={p.id === activeProjectId}
+                    icon={
+                      p.emoji ? (
+                        <span>{p.emoji}</span>
+                      ) : (
+                        <Layers size={12} className="text-[var(--fg-subtle)]" />
+                      )
+                    }
+                    label={p.name}
+                    onSelect={() => {
+                      if (p.id === activeProjectId) {
+                        setActivePage(null);
+                      } else {
+                        setActiveProject(p.id);
+                      }
+                      close();
+                    }}
+                  />
+                ))
+              }
+            </BreadcrumbMenu>
           </>
         )}
         {page && (
@@ -215,9 +254,45 @@ export function TopBar({
  className="text-[var(--fg-subtle)] mx-0.5 hidden md:block"
  aria-hidden
             />
-            <span className="hidden md:flex items-center text-[12.5px] text-[var(--fg-muted)] px-1.5 truncate max-w-[200px]">
-              <PageLabel name={page.name} />
-            </span>
+            <BreadcrumbMenu
+              ariaLabel="Switch page"
+              triggerClassName="hidden md:flex items-center gap-1 pl-1.5 pr-1 h-7 rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[12.5px] text-[var(--fg-muted)] data-[state=open]:bg-[var(--bg-soft)]"
+              trigger={
+                <span className="truncate max-w-[200px]">
+                  <PageLabel name={page.name} />
+                </span>
+              }
+            >
+              {(close) => (
+                <>
+                  <BreadcrumbItem
+                    active={false}
+                    icon={
+                      <LayoutGrid size={12} className="text-[var(--fg-subtle)]" />
+                    }
+                    label="All pages"
+                    onSelect={() => {
+                      setActivePage(null);
+                      close();
+                    }}
+                  />
+                  {projectPages.length > 0 && (
+                    <DropdownMenu.Separator className="my-1 h-px bg-[var(--border)]" />
+                  )}
+                  {projectPages.map((pg) => (
+                    <BreadcrumbItem
+                      key={pg.id}
+                      active={pg.id === activePageId}
+                      label={<PageLabel name={pg.name} />}
+                      onSelect={() => {
+                        setActivePage(pg.id);
+                        close();
+                      }}
+                    />
+                  ))}
+                </>
+              )}
+            </BreadcrumbMenu>
           </>
         )}
       </div>
@@ -422,6 +497,108 @@ export function TopBar({
   );
 }
  
+// Breadcrumb quick-jump menu. Opens on hover (with a small grace delay so the
+// pointer can travel into the panel without it closing) as well as on click /
+// keyboard, so it works on touch and for a11y too.
+function BreadcrumbMenu({
+ ariaLabel,
+ triggerClassName,
+ trigger,
+ children,
+}: {
+ ariaLabel: string;
+ triggerClassName?: string;
+ trigger: React.ReactNode;
+ children: (close: () => void) => React.ReactNode;
+}) {
+ const [open, setOpen] = React.useState(false);
+ const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+ const cancel = () => {
+ if (timer.current) {
+ clearTimeout(timer.current);
+ timer.current = null;
+   }
+  };
+ const openNow = () => {
+ cancel();
+ setOpen(true);
+  };
+ const closeSoon = () => {
+ cancel();
+ timer.current = setTimeout(() => setOpen(false), 140);
+  };
+ React.useEffect(() => cancel, []);
+ return (
+    <DropdownMenu.Root open={open} onOpenChange={setOpen}>
+      <DropdownMenu.Trigger asChild>
+        <button
+ type="button"
+ aria-label={ariaLabel}
+ className={triggerClassName}
+ onPointerEnter={(e) => {
+ if (e.pointerType !== "touch") openNow();
+          }}
+ onPointerLeave={(e) => {
+ if (e.pointerType !== "touch") closeSoon();
+          }}
+        >
+          {trigger}
+          <ChevronDown
+ size={11}
+ className="text-[var(--fg-subtle)] opacity-70 shrink-0"
+ aria-hidden
+          />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+ align="start"
+ sideOffset={4}
+ onPointerEnter={openNow}
+ onPointerLeave={closeSoon}
+ onCloseAutoFocus={(e) => e.preventDefault()}
+ className={cn(
+ "z-[60] min-w-[200px] max-h-[60vh] overflow-y-auto p-1",
+ "bg-[var(--surface)] border border-[var(--border)]",
+ "rounded-[var(--radius-md)] shadow-[var(--shadow-pop)]",
+ "data-[state=open]:animate-cm-in data-[state=closed]:animate-cm-out",
+          )}
+        >
+          {children(() => setOpen(false))}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+function BreadcrumbItem({
+ active,
+ icon,
+ label,
+ onSelect,
+}: {
+ active?: boolean;
+ icon?: React.ReactNode;
+ label: React.ReactNode;
+ onSelect: () => void;
+}) {
+ return (
+    <DropdownMenu.Item
+ onSelect={onSelect}
+ className={cn(
+ "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] text-[12.5px] cursor-default outline-none",
+ "text-[var(--fg)] data-[highlighted]:bg-[var(--bg-soft)]",
+      )}
+    >
+      {icon && <span className="shrink-0">{icon}</span>}
+      <span className="flex-1 truncate">{label}</span>
+      {active && (
+        <Check size={12} className="text-[var(--fg-muted)] shrink-0" />
+      )}
+    </DropdownMenu.Item>
+  );
+}
+
 function NewItem({
  icon,
  label,

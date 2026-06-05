@@ -19,6 +19,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { usePanZoom } from "@/lib/usePanZoom";
 import type { Annotations, Stroke, Shape } from "@/lib/types";
 
 /**
@@ -146,121 +147,45 @@ export function FlowView() {
       : HPAD * 2;
   const totalH = FRAME_HEIGHT + VPAD * 2;
 
-  // Camera (pan in viewport px, zoom is multiplier)
-  const [zoom, setZoom] = React.useState(1);
-  const [pan, setPan] = React.useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = React.useState(false);
-  const wrapRef = React.useRef<HTMLDivElement>(null);
-  const draggingRef = React.useRef<{
-    baseX: number;
-    baseY: number;
-    startX: number;
-    startY: number;
-  } | null>(null);
+  // Camera — imperative pan/zoom (see usePanZoom). Page labels sit ~40px above
+  // each frame, so that's where visible content begins for the chrome tuck.
+  const {
+    wrapRef,
+    worldRef,
+    zoomReadoutRef,
+    chromeRef,
+    zoom,
+    pan,
+    interacting,
+    isPanning,
+    onWheel,
+    fit,
+    actualSize,
+    zoomBy,
+    screenToWorld,
+    onPointerDown: camPointerDown,
+    onPointerMove: camPointerMove,
+    onPointerUp: camPointerUp,
+  } = usePanZoom({
+    totalW,
+    totalH,
+    panButtons: [0, 2], // right-drag pans even mid-sketch
+    contentTopWorldY: VPAD - 40,
+  });
 
-  // Auto-fit when content size or active project changes. Triggered via a
-  // sentinel key so we don't re-fit when the user has manually moved.
+  // Auto-fit on scene change (project switch / frame count / world size), but
+  // never when the user has merely panned or zoomed.
   const fitKey = `${activeProjectId ?? "_"}:${frames.length}:${totalW}:${totalH}`;
   const lastFitKeyRef = React.useRef<string | null>(null);
-
-  const fitCamera = React.useCallback(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    if (r.width <= 0 || r.height <= 0) return;
-    const margin = 64;
-    const s = Math.min(
-      1,
-      Math.min((r.width - margin) / totalW, (r.height - margin) / totalH),
-    );
-    setZoom(s);
-    setPan({ x: (r.width - totalW * s) / 2, y: (r.height - totalH * s) / 2 });
-  }, [totalW, totalH]);
-
-  const actualSize = React.useCallback(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setZoom(1);
-    setPan({ x: (r.width - totalW) / 2, y: 40 });
-  }, [totalW]);
-
-  // Run fit once per "scene change". Layout effect avoids the post-paint flash.
   React.useLayoutEffect(() => {
     if (lastFitKeyRef.current === fitKey) return;
     lastFitKeyRef.current = fitKey;
-    fitCamera();
-  }, [fitKey, fitCamera]);
+    fit();
+  }, [fitKey, fit]);
 
-  // Wheel behaviour, Figma-style:
-  //  - Plain scroll = zoom around cursor (most users have a wheel mouse).
-  //  - Shift+scroll  = horizontal pan.
-  //  - Trackpad two-finger drag (deltaX != 0) = pan in both axes.
-  const onWheel = (e: React.WheelEvent) => {
-    const isPinch = e.ctrlKey || e.metaKey;
-    const isTrackpadPan = !isPinch && Math.abs(e.deltaX) > 0;
-    if (e.shiftKey && !isPinch) {
-      setPan((p) => ({ x: p.x - e.deltaY, y: p.y }));
-      return;
-    }
-    if (isTrackpadPan) {
-      setPan((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
-      return;
-    }
-    // Zoom around cursor
-    const r = wrapRef.current?.getBoundingClientRect();
-    if (!r) return;
-    const mx = e.clientX - r.left;
-    const my = e.clientY - r.top;
-    const wx = (mx - pan.x) / zoom;
-    const wy = (my - pan.y) / zoom;
-    const next = Math.max(0.1, Math.min(3, zoom * (1 - e.deltaY * 0.0018)));
-    setZoom(next);
-    setPan({ x: mx - wx * next, y: my - wy * next });
-  };
-
-  const zoomAroundCenter = (next: number) => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const cx = r.width / 2;
-    const cy = r.height / 2;
-    const wx = (cx - pan.x) / zoom;
-    const wy = (cy - pan.y) / zoom;
-    const clamped = Math.max(0.1, Math.min(3, next));
-    setZoom(clamped);
-    setPan({ x: cx - wx * clamped, y: cy - wy * clamped });
-  };
-
-  // Unified pointer-based pan + pinch zoom (works for mouse, pen, and touch).
-  //   1 active pointer  → pan
-  //   2 active pointers → pinch zoom around the midpoint, with simultaneous
-  //                       midpoint translation so the gesture feels anchored.
-  const pointersRef = React.useRef<Map<number, { x: number; y: number }>>(
-    new Map(),
-  );
-  const pinchRef = React.useRef<{
-    startDist: number;
-    startZoom: number;
-    startPan: { x: number; y: number };
-    worldX: number;
-    worldY: number;
-  } | null>(null);
-
-  const screenToWorld = React.useCallback(
-    (clientX: number, clientY: number) => {
-      const r = wrapRef.current?.getBoundingClientRect();
-      if (!r) return { x: 0, y: 0 };
-      return {
-        x: (clientX - r.left - pan.x) / zoom,
-        y: (clientY - r.top - pan.y) / zoom,
-      };
-    },
-    [pan.x, pan.y, zoom],
-  );
-
-  // Right-click pans even when a draw tool is active, so the user can
-  // reposition the canvas mid-sketch without juggling the toolbar.
+  // Drawing intent: a non-select tool, with no modifier/right-button (those
+  // pan even mid-sketch). When the user is panning/zooming instead, we hand the
+  // event straight to the imperative camera so dragging never re-renders React.
   const isPanIntent = (e: React.PointerEvent) => {
     if (tool === "select") return true;
     if (e.pointerType === "mouse" && e.button === 2) return true;
@@ -269,16 +194,11 @@ export function FlowView() {
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
-    // Mouse: react to primary (draw / pan) and right (pan-while-drawing).
     if (e.pointerType === "mouse" && e.button !== 0 && e.button !== 2) return;
-
-    // Drawing path — only when a non-select tool is chosen and intent is to
-    // draw (not pan via right-click / modifier). Single pointer only;
-    // multi-touch still falls through to pan/pinch so two-finger gestures
-    // continue to work.
     if (
       !isPanIntent(e) &&
-      pointersRef.current.size === 0 &&
+      !drawingRef.current &&
+      e.isPrimary &&
       tool !== "select"
     ) {
       e.preventDefault();
@@ -312,41 +232,10 @@ export function FlowView() {
       }
       return;
     }
-
-    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    if (pointersRef.current.size === 1) {
-      draggingRef.current = {
-        baseX: pan.x,
-        baseY: pan.y,
-        startX: e.clientX,
-        startY: e.clientY,
-      };
-      setIsDragging(true);
-    } else if (pointersRef.current.size === 2) {
-      // Switch from pan → pinch
-      draggingRef.current = null;
-      const pts = Array.from(pointersRef.current.values());
-      const dx = pts[0].x - pts[1].x;
-      const dy = pts[0].y - pts[1].y;
-      const dist = Math.hypot(dx, dy) || 1;
-      const mx = (pts[0].x + pts[1].x) / 2;
-      const my = (pts[0].y + pts[1].y) / 2;
-      const r = wrapRef.current?.getBoundingClientRect();
-      const lx = r ? mx - r.left : mx;
-      const ly = r ? my - r.top : my;
-      pinchRef.current = {
-        startDist: dist,
-        startZoom: zoom,
-        startPan: { ...pan },
-        worldX: (lx - pan.x) / zoom,
-        worldY: (ly - pan.y) / zoom,
-      };
-    }
+    camPointerDown(e);
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
-    // Drawing path
     if (drawingRef.current) {
       const { x, y } = screenToWorld(e.clientX, e.clientY);
       const d = drawingRef.current;
@@ -375,37 +264,7 @@ export function FlowView() {
       }
       return;
     }
-
-    if (!pointersRef.current.has(e.pointerId)) return;
-    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-    if (pointersRef.current.size === 2 && pinchRef.current) {
-      const pts = Array.from(pointersRef.current.values());
-      const dx = pts[0].x - pts[1].x;
-      const dy = pts[0].y - pts[1].y;
-      const dist = Math.hypot(dx, dy) || 1;
-      const next = Math.max(
-        0.1,
-        Math.min(3, pinchRef.current.startZoom * (dist / pinchRef.current.startDist)),
-      );
-      const mx = (pts[0].x + pts[1].x) / 2;
-      const my = (pts[0].y + pts[1].y) / 2;
-      const r = wrapRef.current?.getBoundingClientRect();
-      const lx = r ? mx - r.left : mx;
-      const ly = r ? my - r.top : my;
-      setZoom(next);
-      setPan({
-        x: lx - pinchRef.current.worldX * next,
-        y: ly - pinchRef.current.worldY * next,
-      });
-      return;
-    }
-    const d = draggingRef.current;
-    if (!d) return;
-    setPan({
-      x: d.baseX + (e.clientX - d.startX),
-      y: d.baseY + (e.clientY - d.startY),
-    });
+    camPointerMove(e);
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
@@ -445,26 +304,7 @@ export function FlowView() {
       }
       return;
     }
-    pointersRef.current.delete(e.pointerId);
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    if (pointersRef.current.size < 2) pinchRef.current = null;
-    if (pointersRef.current.size === 0) {
-      draggingRef.current = null;
-      setIsDragging(false);
-    } else if (pointersRef.current.size === 1) {
-      // Re-base pan from the surviving pointer so the canvas doesn't jump.
-      const remaining = Array.from(pointersRef.current.values())[0];
-      draggingRef.current = {
-        baseX: pan.x,
-        baseY: pan.y,
-        startX: remaining.x,
-        startY: remaining.y,
-      };
-    }
+    camPointerUp(e);
   };
 
   if (!items.length) {
@@ -493,15 +333,15 @@ export function FlowView() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
- onContextMenu={(e) => {
- if (tool !== "select") e.preventDefault();
+      onContextMenu={(e) => {
+        if (tool !== "select") e.preventDefault();
       }}
       className="absolute inset-2 overflow-hidden bg-[var(--bg-soft)] select-none rounded-[var(--radius-lg)] border border-[var(--border)]"
       style={{
         cursor:
           tool !== "select"
             ? "crosshair"
-            : isDragging
+            : isPanning
               ? "grabbing"
               : "grab",
         touchAction: "none",
@@ -521,12 +361,18 @@ export function FlowView() {
 
       {/* World */}
       <div
+        ref={worldRef}
         className="absolute top-0 left-0 origin-top-left"
         style={{
           width: totalW,
           height: totalH,
-          transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
-          willChange: "transform",
+          // translate3d (GPU layer) while moving for buttery panning; plain 2D
+          // at rest so the browser re-rasterizes the screens crisply at the
+          // current zoom — full resolution, no blur.
+          transform: interacting
+            ? `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`
+            : `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          willChange: interacting ? "transform" : "auto",
         }}
       >
         {/* Connector arrows */}
@@ -572,7 +418,16 @@ export function FlowView() {
             key={page.id}
             data-frame
             className="absolute"
-            style={{ left: x, top: y, width: w, height: h }}
+            style={{
+              left: x,
+              top: y,
+              width: w,
+              height: h,
+              // Skip rendering/decoding off-screen frames so a long flow opens
+              // instantly; full resolution preserved when on-screen.
+              contentVisibility: "auto",
+              containIntrinsicSize: `${w}px ${h}px`,
+            }}
           >
             {/* Page header above the frame */}
             <div className="absolute left-0 right-0 -top-10 flex items-center gap-2 text-[12px] text-[var(--fg-muted)] truncate">
@@ -800,14 +655,19 @@ export function FlowView() {
         }}
       />
 
-      {/* Toolbar — top center, floats above the canvas */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-0.5 px-1 h-9 rounded-[var(--radius-md)] bg-[var(--surface)] border border-[var(--border)] shadow-[var(--shadow-pop)]">
-        <span className="px-2 text-[11.5px] text-[var(--fg-muted)] tabular-nums select-none">
+      {/* Toolbar — top center. Wrapped in pf-chrome so it auto-tucks away when
+          zoomed content slides under it, and peeks back near the top edge. */}
+      <div ref={chromeRef} className="pf-chrome absolute inset-x-0 top-0 z-10">
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-0.5 px-1 h-9 rounded-[var(--radius-md)] bg-[var(--surface)] border border-[var(--border)] shadow-[var(--shadow-pop)]">
+        <span
+          ref={zoomReadoutRef}
+          className="px-2 text-[11.5px] text-[var(--fg-muted)] tabular-nums select-none"
+        >
           {Math.round(zoom * 100)}%
         </span>
         <button
           type="button"
-          onClick={() => zoomAroundCenter(zoom / 1.2)}
+          onClick={() => zoomBy(1 / 1.2)}
           className="h-7 w-7 grid place-items-center rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[var(--fg-muted)] hover:text-[var(--fg)] focus-ring"
           aria-label="Zoom out"
         >
@@ -815,7 +675,7 @@ export function FlowView() {
         </button>
         <button
           type="button"
-          onClick={() => zoomAroundCenter(zoom * 1.2)}
+          onClick={() => zoomBy(1.2)}
           className="h-7 w-7 grid place-items-center rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] text-[var(--fg-muted)] hover:text-[var(--fg)] focus-ring"
           aria-label="Zoom in"
         >
@@ -824,7 +684,7 @@ export function FlowView() {
         <span className="mx-1 h-4 w-px bg-[var(--border)]" />
         <button
           type="button"
-          onClick={fitCamera}
+          onClick={fit}
           className="h-7 px-2 text-[11.5px] rounded-[var(--radius-sm)] hover:bg-[var(--bg-soft)] inline-flex items-center gap-1 text-[var(--fg-muted)] hover:text-[var(--fg)] focus-ring"
         >
           <Minimize2 size={11} /> Fit
@@ -840,6 +700,7 @@ export function FlowView() {
         <span className="px-2 text-[11.5px] text-[var(--fg-muted)] select-none">
           {pickedCount}/{frames.length} pages picked
         </span>
+      </div>
       </div>
     </div>
   );
