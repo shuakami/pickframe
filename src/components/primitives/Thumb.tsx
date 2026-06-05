@@ -1,7 +1,7 @@
 "use client";
  
 import * as React from "react";
-import { getBlobUrl } from "@/lib/db";
+import { getBlobUrl, peekBlobUrl } from "@/lib/db";
 import { cn } from "@/lib/utils";
 import type { Annotations } from "@/lib/types";
 import { AnnotationOverlay } from "../annotation/AnnotationOverlay";
@@ -32,13 +32,19 @@ export function Thumb({
  ...rest
 }: ThumbProps) {
  // Track resolved src per blobId so we never synchronously setState inside an effect body.
+ // Seed from the synchronous object-URL cache so an already-decoded blob paints
+ // on the first render — no "loading" flash, no extra render — on revisits.
  const [resolved, setResolved] = React.useState<{
  blobId: string | undefined;
  src: string | null;
-  }>({ blobId: undefined, src: null });
+  }>(() => ({ blobId, src: peekBlobUrl(blobId) ?? null }));
  
   React.useEffect(() => {
  if (!blobId) return;
+ // Warm blobs are served synchronously via `peekBlobUrl` below, so the
+ // effect only has to resolve cold ones — and it sets state from the async
+ // callback, never synchronously in the effect body.
+ if (peekBlobUrl(blobId)) return;
  let cancelled = false;
  getBlobUrl(blobId).then((u) => {
  if (!cancelled && u) setResolved({ blobId, src: u });
@@ -48,7 +54,10 @@ export function Thumb({
     };
   }, [blobId]);
  
- const src = resolved.blobId === blobId ? resolved.src : null;
+ // Prefer the resolved state; otherwise fall back to the synchronous cache so
+ // a blobId change to an already-decoded image paints immediately (no flash).
+ const src =
+    resolved.blobId === blobId ? resolved.src : peekBlobUrl(blobId) ?? null;
  
  return (
     <div
@@ -65,6 +74,7 @@ export function Thumb({
           <img
  src={src}
  alt={alt ?? ""}
+ decoding="async"
  className={cn(
  "w-full h-full select-none",
               fit === "cover" ? "object-cover" : "object-contain",

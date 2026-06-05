@@ -33,9 +33,12 @@ import { copyImageToClipboard, saveImageToDisk } from "@/lib/imageActions";
  
 const DRAG_MIME = "application/x-pickframe-version";
  
-export function VersionCard({ version }: { version: Version }) {
+function VersionCardImpl({ version }: { version: Version }) {
+ // Subscribe only to *this* card's selected/focused booleans — never the
+ // whole selection Set. Otherwise selecting one card would re-render every
+ // card on the board. The multi-drag payload reads the live set lazily from
+ // `getState()` inside the drag handler, so no broad subscription is needed.
  const selected = useStore((s) => s.selectedIds.has(version.id));
- const selectedIds = useStore((s) => s.selectedIds);
  const focused = useStore((s) => s.focusedVersionId === version.id);
  const toggleSelected = useStore((s) => s.toggleSelected);
  const setSelected = useStore((s) => s.setSelected);
@@ -48,9 +51,13 @@ export function VersionCard({ version }: { version: Version }) {
  const deleteVersion = useStore((s) => s.deleteVersion);
  const pages = useStore((s) => s.pages);
  
- const projectPages = pages
-    .filter((p) => p.projectId === version.projectId)
-    .sort((a, b) => a.order - b.order);
+ const projectPages = React.useMemo(
+    () =>
+      pages
+        .filter((p) => p.projectId === version.projectId)
+        .sort((a, b) => a.order - b.order),
+    [pages, version.projectId],
+  );
 
  const isMobile = useIsMobile();
 
@@ -105,8 +112,9 @@ export function VersionCard({ version }: { version: Version }) {
  
  const handleDragStart = (e: React.DragEvent) => {
  // If part of a multi-select, drag the whole set; otherwise just this one.
+ const selectedIds = useStore.getState().selectedIds;
  const ids =
-      selected && selectedIds.size > 1
+      selectedIds.has(version.id) && selectedIds.size > 1
  ? Array.from(selectedIds)
  : [version.id];
     e.dataTransfer.effectAllowed = "move";
@@ -508,4 +516,9 @@ function MenuItem({
   );
 }
  
+// Memoized so a card only re-renders when its own `version` object changes
+// identity (immer gives changed versions a fresh reference; untouched ones
+// keep theirs) or when its selected/focused booleans flip.
+export const VersionCard = React.memo(VersionCardImpl);
+
 export const VERSION_DRAG_MIME = DRAG_MIME;

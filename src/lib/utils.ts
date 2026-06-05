@@ -33,10 +33,30 @@ export function useMediaQuery(query: string): boolean {
  *  - selection toggles always visible, not hover-only
  *  - heavy floating panels become full-width / scrollable
  */
-export function useIsMobile(): boolean {
+function useIsMobileMedia(): boolean {
   const narrow = useMediaQuery("(max-width: 1023.5px)");
   const coarse = useMediaQuery("(pointer: coarse)");
   return narrow || coarse;
+}
+
+// Single source of truth for the "is mobile" flag. Without this, every
+// component that wanted it (and every VersionCard on the board) spun up its
+// own pair of `matchMedia` listeners and re-rendered independently on resize.
+// Computing it once at the app root and fanning it out via context collapses
+// hundreds of listeners into two and lets React batch the updates.
+const MobileContext = React.createContext<boolean | null>(null);
+
+export function MobileProvider({ children }: { children: React.ReactNode }) {
+  const value = useIsMobileMedia();
+  return React.createElement(MobileContext.Provider, { value }, children);
+}
+
+export function useIsMobile(): boolean {
+  const ctx = React.useContext(MobileContext);
+  // Falls back to `false` outside a provider — every real consumer renders
+  // under <MobileProvider> in the AppShell, so this only affects detached
+  // test/SSR renders, where "not mobile" is the safe default.
+  return ctx ?? false;
 }
  
 export function formatRelative(ts: number): string {

@@ -51,6 +51,17 @@ export async function getBlob(id: string): Promise<Blob | undefined> {
 }
  
 const objectUrlCache = new Map<string, string>();
+
+/**
+ * Synchronous cache hit, or `undefined` if the blob hasn't been resolved yet.
+ * Lets consumers (e.g. <Thumb>) paint a previously-decoded image on the very
+ * first render — no loading flash, no extra state-update render — while still
+ * falling back to the async `getBlobUrl` for cold blobs.
+ */
+export function peekBlobUrl(id: string | undefined): string | undefined {
+ if (!id) return undefined;
+ return objectUrlCache.get(id);
+}
  
 export async function getBlobUrl(id: string): Promise<string | undefined> {
  const cached = objectUrlCache.get(id);

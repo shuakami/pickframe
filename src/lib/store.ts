@@ -130,6 +130,13 @@ interface Actions {
  setImportOpen: (b: boolean) => void;
  setPendingImportFile: (f: File | null) => void;
  setBoardScrollTop: (n: number) => void;
+
+ /**
+  * Apply a URL-decoded snapshot of navigable UI state atomically, validating
+  * every id against currently-loaded data so a stale/garbage link can never
+  * strand the user on an empty view. Must run after `loadAll`.
+  */
+ applyUrlState: (s: Partial<import("./urlState").UrlState>) => void;
 }
  
 type Store = UIState & DataState & Actions;
@@ -692,6 +699,70 @@ export const useStore = create<Store>()(
  setBoardScrollTop(n) {
  set((s) => {
         s.boardScrollTop = n;
+      });
+    },
+
+ applyUrlState(next) {
+ const { projects, pages, versions } = get();
+ set((s) => {
+ // Project: only adopt if it exists; otherwise keep whatever loadAll picked.
+ let projectId = s.activeProjectId;
+ if (next.activeProjectId !== undefined) {
+ if (
+            next.activeProjectId &&
+            projects.some((p) => p.id === next.activeProjectId)
+          ) {
+            projectId = next.activeProjectId;
+          }
+        }
+        s.activeProjectId = projectId;
+
+ const inProject = (vId: string | null | undefined) =>
+          !!vId &&
+          versions.some((v) => v.id === vId && v.projectId === projectId);
+
+ // Active page must belong to the resolved project.
+ if (next.activePageId !== undefined) {
+          s.activePageId =
+            next.activePageId &&
+            pages.some(
+              (p) => p.id === next.activePageId && p.projectId === projectId,
+            )
+              ? next.activePageId
+              : null;
+        }
+
+ // Compare set: keep only ids that still exist in this project.
+ if (next.compareIds !== undefined) {
+          s.compareIds = next.compareIds.filter((id) => inProject(id));
+        }
+
+ // Focused version (Single view / Inspector).
+ if (next.focusedVersionId !== undefined) {
+ if (inProject(next.focusedVersionId)) {
+            s.focusedVersionId = next.focusedVersionId;
+            s.selectedIds = new Set([next.focusedVersionId!]);
+          } else {
+            s.focusedVersionId = null;
+          }
+        }
+
+ if (next.search !== undefined) s.search = next.search;
+ if (next.filter !== undefined) s.filter = next.filter;
+
+ // View mode last — and only honor view modes whose required state is
+ // actually present, so a stale `?view=single` with a since-deleted
+ // focus id falls back to the board instead of a blank editor.
+ if (next.viewMode !== undefined) {
+ const v = next.viewMode;
+ if (v === "single" && !s.focusedVersionId) {
+            s.viewMode = "board";
+          } else if (v === "compare" && s.compareIds.length === 0) {
+            s.viewMode = "board";
+          } else {
+            s.viewMode = v;
+          }
+        }
       });
     },
   })),

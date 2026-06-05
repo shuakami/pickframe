@@ -4,7 +4,8 @@ import * as React from "react";
 import dynamic from "next/dynamic";
 import { AnimatePresence, motion } from "framer-motion";
 import { useStore } from "@/lib/store";
-import { cn } from "@/lib/utils";
+import { cn, MobileProvider } from "@/lib/utils";
+import { useUrlSync } from "@/lib/useUrlSync";
 import { seedDemoData } from "@/lib/seed";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
@@ -37,6 +38,10 @@ const ImportDialog = dynamic(
  
 export function AppShell() {
  const loaded = useStore((s) => s.loaded);
+
+ // Bind navigable UI state to the URL so refreshes / shared links restore
+ // the exact view, project, page, focus, compare set and filters.
+ useUrlSync();
 
  // Splash visibility — debounced so it never flickers.
  //
@@ -223,6 +228,7 @@ export function AppShell() {
  const ease = [0.2, 0.7, 0.2, 1] as const;
  
  return (
+    <MobileProvider>
     <TooltipProvider>
       <div className="flex flex-col h-full bg-[var(--bg)] text-[var(--fg)]">
         <TopBar onToggleMobileSidebar={() => setMobileNavOpen(true)} />
@@ -334,5 +340,6 @@ export function AppShell() {
         <ToastHost />
       </div>
     </TooltipProvider>
+    </MobileProvider>
   );
 }
