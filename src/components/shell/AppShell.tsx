@@ -86,7 +86,6 @@ export function AppShell() {
  const focused = useStore((s) => s.focusedVersionId);
  const setFocused = useStore((s) => s.setFocused);
  const viewMode = useStore((s) => s.viewMode);
- const compareIds = useStore((s) => s.compareIds);
  
  // Bootstrap: theme + seed + load
   React.useEffect(() => {
@@ -198,11 +197,12 @@ export function AppShell() {
  setWasCollapsedBeforeSingle(null);
     }
  }
- // Inspector is only useful on the Board (where you can hover/select cards).
- // In Compare/Flow it just floats over the canvas as a blank-looking panel,
- // so suppress it there.
- const showInspector =
-    viewMode === "board" && (!!focused || compareIds.length > 0);
+ // Inspector is only useful on the Board (where you can hover/select cards),
+ // and only has anything to render when a version is actually focused — it
+ // shows a single version's details. A non-empty compare set is not enough:
+ // with nothing focused the panel would just float there blank. In
+ // Compare/Flow it likewise has no place, so it stays board-only.
+ const showInspector = viewMode === "board" && !!focused;
  
  // Hold the last shown id across the exit animation, so the panel keeps
  // displaying real content while it slides out instead of going blank.
